@@ -7,22 +7,28 @@ semantics at every scale.
 This is a research prototype. It runs, it is tested, a core of it is machine-proved, and its limits are
 written down. It is not production software.
 
+The implementation is Rust (`crates/rigor`), strictly typed: event kinds, acts, propositions, statuses,
+findings, rule paths, templates and refusal reasons are closed types; identifiers are distinct newtypes;
+nothing is decided by inspecting a string. `unsafe`, `unwrap`, `expect`, `panic!`, indexing and `as` casts
+are denied by lint in library code.
+
 ## Run it
 
-Requires Python 3.12 (standard library only). Lean 4 is needed only to re-check the proofs.
-
 ```sh
-python -m rigor.scenario                      # the end-to-end demonstrator, narrated
-python -m unittest discover -s tests -t .     # 49 tests: properties, model checks, counterexamples
+cargo run --bin scenario                      # the end-to-end demonstrator, narrated
+cargo test                                    # 46 tests + 8 doctests (4 show mistakes that do not compile)
+cargo clippy --all-targets                    # the strict lint set in Cargo.toml; must be clean
+cargo run --release --bin measure             # regenerates docs/04-measurements.md
 lean proofs/Rigor.lean                        # 7 machine-checked theorems about the model
-python -m bench.measure                       # regenerates docs/04-measurements.md (~20 s)
 ```
+
+Dependencies: `serde`, `serde_json`, `sha2`. Lean 4 is needed only to re-check the proofs.
 
 ## The idea in one screen
 
-**Kernel (227 lines).** An append-only hash-chained event log, and *units*: deterministic open transition
-systems. Units compose in parallel (`Par`) and can be wrapped in a boundary (`Entity`) that makes a whole
-system look like one actor. A composite is a unit. That is the only recursion principle.
+**Kernel.** An append-only hash-chained event log, and *units*: deterministic open transition systems,
+generic in the event type. Units compose in parallel (`Par`) and can be wrapped in a boundary (`Entity`) that
+makes a whole system look like one actor. A composite is a unit. That is the only recursion principle.
 
 **Everything else is an ordinary unit**, built from established theory:
 
@@ -32,7 +38,7 @@ system look like one actor. A composite is a unit. That is the only recursion pr
 | `ledger` | Moves resources; conserves totals | resource algebras |
 | `epi` | Assesses claims from admissible evidence; revises when evidence, artifacts or rules change | grounded argumentation |
 | `norms` | Commitments whose status is a function of current facts; secondary duties on violation | social commitments |
-| `adj` | Derives who is accountable, culpable, liable — with a proof and its assumptions | stratified Datalog |
+| `adj` | Derives who is accountable, culpable, liable — with a proof and its assumptions | sorted, stratified Datalog |
 | `gov` | Rules are versioned data, amended only by the rules' own procedure | rules-as-data, entrenchment |
 
 Humans, AI agents and services are not different kinds of thing in the kernel. Their differences are
@@ -58,32 +64,36 @@ pays it 30. The service fails and says so; the agent reports success anyway, cit
 
 | File | Content |
 |---|---|
-| `docs/01-prior-art.md` | Comparison of 23 families of formalisms; what was reused; the counterexample behind each addition |
-| `docs/02-semantics.md` | The formal model, and answers to the ten research questions |
-| `docs/03-status-ledger.md` | **Every claim, marked proved / model-checked / tested / assumed / unresolved**; negative results; trusted assumptions |
-| `docs/04-measurements.md` | Trusted-base size, encoding overhead, scaling, state-space growth |
+| `docs/01-prior-art.md` | Comparison of 24 families of formalisms; what was reused; the counterexample behind each addition |
+| `docs/02-semantics.md` | The formal model, the typing discipline, and answers to the ten research questions |
+| `docs/03-status-ledger.md` | **Every claim, marked proved / compiler-enforced / model-checked / tested / assumed / unresolved**; negative results; trusted assumptions |
+| `docs/04-measurements.md` | Trusted-base size, encoding overhead, scaling, state-space growth (release build) |
 | `docs/05-roadmap.md` | What to do next, ordered by which assumption it removes |
 
 ## Layout
 
 ```
-rigor/kernel/    event.py unit.py            the trusted substrate
-                 argue.py datalog.py         the two reasoners
-                 explore.py                  bounded model checker
-rigor/norms/     institution ledger epistemic commitments adjudicator governance org
-rigor/           actors.py scenario.py impact.py adapters.py synth.py
+crates/rigor/src/
+  kernel/      base.rs log.rs unit.rs runtime.rs   the trusted substrate (generic in the event type)
+               explore.rs                          bounded model checker
+  logic/       argue.rs datalog.rs                 the two reasoners (generic)
+  model/       ids.rs event.rs rules.rs            the closed, typed vocabulary
+  units/       institution ledger epistemic norms adjudicator governance
+  org.rs actors.rs scenario.rs world.rs impact.rs adapters.rs synth.rs
+  bin/         scenario.rs measure.rs
+crates/rigor/tests/   kernel scenario properties counterexamples adapters
 proofs/Rigor.lean
-tests/           test_kernel test_scenario test_properties test_counterexamples test_adapters
-bench/measure.py
 ```
 
 ## The most important caveats
 
-- The Lean theorems are about a mathematical model. Nothing proves the Python code implements that model;
-  only tests connect them.
+- The Lean theorems are about a mathematical model. Nothing proves that the Rust code realises that model;
+  tests are the only link.
 - The system never establishes that a claim is *true*. It computes an assessment from evidence supplied by
   sources it was told to trust.
 - There is one log and one clock. Distribution, partitions and confidentiality are not addressed.
 - Liveness is not established for anything, and is shown not to compose.
+- Strict typing closes the vocabulary: adding a new kind of proposition, tag or predicate means changing an
+  enum and recompiling. That is a deliberate trade, recorded as U16 in the ledger.
 
-The full list is in `docs/03-status-ledger.md` §4–§6.
+The full list is in `docs/03-status-ledger.md`.

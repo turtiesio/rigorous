@@ -62,12 +62,16 @@ Each addition is small and each is pinned by an executable test.
 
 | Addition | Counterexample that forced it | Test |
 |---|---|---|
-| Commitment status is a **function of current facts**, not a stored state machine | With stored states, `satisfied` is terminal; a claim refuted after acceptance leaves the duty wrongly discharged | `test_2_refutation_revises_claim_and_obligations`, lifecycle model check |
-| Derived duties carry a **basis** and are **voided** when the basis falls | Monitor retracts its probe: the remediation duty would otherwise survive the violation it remedied | `test_retracting_the_refutation_reinstates…` |
-| Composition delivers **one event at a time**; a single scheduler owns feedback | Run-to-completion composites are not associative | `test_run_to_completion_composition_is_not_associative` |
-| A kernel **`settle`** marker at quiescence | Without it the adjudicator judged a half-propagated state and created, then voided, a liability within one cascade | found while testing; `test_rule_change_closes_a_responsibility_gap` asserts exactly two verdicts |
-| **Content-derived identifiers** | Counter-based ids made independent stimuli non-commuting | `test_independent_stimuli_commute` |
-| Evidence is **bound to artifact digests** and goes stale | A test that passed on yesterday's code "supports" today's | `test_evidence_is_bound_to_the_artifact_it_was_about` |
-| Support **rooted in the claimant** is inadmissible, including via inference | An agent certifies its own claim by deriving it from its own statement | `test_no_self_certification` |
+| Commitment status is a **function of current facts**, not a stored state machine | With stored states, `satisfied` is terminal; a claim refuted after acceptance leaves the duty wrongly discharged | `main_scenario`, `model_check_single_commitment` |
+| Derived duties carry a **basis** and are **voided** when the basis falls | Monitor retracts its probe: the remediation duty would otherwise survive the violation it remedied | `retracting_the_refutation_reinstates_everything_except_what_already_happened` |
+| Composition delivers **one event at a time**; a single scheduler owns feedback | Run-to-completion composites are not associative | `run_to_completion_composition_is_not_associative` |
+| A kernel **`settle`** marker at quiescence | Without it the adjudicator judged a half-propagated state and created, then voided, a liability within one cascade | found while testing; `main_scenario` asserts one verdict per cascade |
+| **Content-derived identifiers** | Counter-based ids made independent stimuli non-commuting | `independent_stimuli_commute` |
+| Evidence is **bound to artifact digests** and goes stale | A test that passed on yesterday's code "supports" today's | `evidence_is_bound_to_the_artifact_it_was_about` |
+| Support **rooted in the claimant** is inadmissible, including via inference | An agent certifies its own claim by deriving it from its own statement | `no_self_certification` |
 
-No new logic, calculus or ontology was introduced.
+| **Sorts** on the predicates of the rule language | A rule with `Debtor`'s arguments swapped was accepted and silently derived nothing | `rules_without_a_unique_meaning_are_rejected` |
+| Events carry **no actor field**; the kernel assigns it | In an untyped prototype a unit could put any name in its payload and had to be ignored correctly everywhere | `a_unit_cannot_impersonate` |
+
+No new logic, calculus or ontology was introduced. The typing adds no semantics; it removes ways of
+writing the same semantics wrongly.

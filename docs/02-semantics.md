@@ -124,7 +124,31 @@ enacted when approved by `quorum(ρ)` distinct holders of the `approve` power, p
 (i) leaves entrenched paths untouched, (ii) has safe, stratified responsibility rules, (iii) has an acyclic
 template tag graph, and (iv) keeps `quorum ≥ 1`. Enactment emits `rules.changed`; `epi` and `adj` re-evaluate.
 
-## 8. How the questions in the brief are answered
+## 8. Typing discipline
+
+The mathematical model above is realised with one rule: **no meaning is carried by the content of a string.**
+
+- The kernel is generic in an event type `E` with a closed set of kinds `E::Kind` and a closed set of
+  failures `E::Failure`. A unit's interface is a pair of sets of kinds.
+- The institutional vocabulary is one closed sum type `Event`. What an actor can attempt is the closed sum
+  `Act`; the count-as gate turns `Do { act }` into `Ok { by, via, act }` without ever inspecting text.
+- Identifiers are opaque. Those that name things chosen by people are validated `Name`s (`[a-z0-9_-]+`);
+  those that name things created by the system are 64-bit digests of the thing's canonical encoding, each in
+  its own newtype. A capability id says where it came from: `Base`, `Own`, `Charter`, or `Delegated(digest)`.
+- A proposition is structured: `Done(task)`, `Remediated(commitment)`, `Audited(commitment)`,
+  `Conforms(requirement)`, `Fact(name)`. Templates build propositions and parties from small expression
+  types, never by substitution into text.
+- Responsibility rules are sorted Datalog: every predicate has a signature over the sorts *actor, commitment,
+  proposition, status, tag, kind, role, boolean, assessment*, and a rule in which a variable is used at two
+  different sorts is rejected.
+- A refusal is an ordinary event carrying an enumerated reason. A *fault* (the machinery itself cannot
+  proceed) is a separate, also enumerated, error type; library code has no other way to fail.
+- Canonical form: everything persisted or used as an identity is hashed from its JSON encoding, in which
+  maps are ordered and field order is fixed by the type.
+
+`03-status-ledger.md` §1a lists what this makes inexpressible, and what it does not.
+
+## 9. How the questions in the brief are answered
 
 1. **Creation, transfer, discharge of normative positions.** Created by an empowered act (`commit`,
    `delegate`) or by a rule template; transferred by `assign` (claims) and `delegate` (powers); discharged by
