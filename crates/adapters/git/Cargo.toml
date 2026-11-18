@@ -1,0 +1,13 @@
+[package]
+name = "rigor-adapter-git"
+version = "0.1.0"
+edition = "2021"
+description = "Adapter: git histories"
+
+[dependencies]
+rigor-kernel = { path = "../../kernel" }
+rigor-institution = { path = "../../institution" }
+rigor-adapter-host = { path = "../host" }
+
+[lints]
+workspace = true

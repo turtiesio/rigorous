@@ -1,0 +1,13 @@
+[package]
+name = "rigor-demo"
+version = "0.1.0"
+edition = "2021"
+description = "Demonstration actors, the end-to-end scenario, synthetic worlds"
+
+[dependencies]
+rigor-kernel = { path = "../kernel" }
+rigor-institution = { path = "../institution" }
+serde = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

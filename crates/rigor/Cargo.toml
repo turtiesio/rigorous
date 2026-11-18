@@ -5,10 +5,18 @@ edition = "2021"
 description = "A strictly typed, compositional foundation for modelling and governing systems"
 
 [dependencies]
+rigor-kernel = { path = "../kernel" }
+rigor-logic = { path = "../logic" }
+rigor-institution = { path = "../institution" }
+rigor-adapter-host = { path = "../adapters/host" }
+rigor-adapter-git = { path = "../adapters/git" }
+rigor-adapter-chain = { path = "../adapters/chain" }
+rigor-adapter-registry = { path = "../adapters/registry" }
+rigor-demo = { path = "../demo" }
+rigor-steward = { path = "../steward" }
+rigor-mind = { path = "../mind" }
 serde = { version = "1", features = ["derive"] }
-serde_json = { version = "1", features = ["raw_value"] }
-bincode = "1"
-sha2 = "0.10"
+serde_json = "1"
 
 [dev-dependencies]
 bincode = "1"

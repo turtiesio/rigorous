@@ -1,0 +1,12 @@
+[package]
+name = "rigor-adapter-chain"
+version = "0.1.0"
+edition = "2021"
+description = "Adapter: blocks of transfers"
+
+[dependencies]
+rigor-kernel = { path = "../../kernel" }
+rigor-institution = { path = "../../institution" }
+
+[lints]
+workspace = true

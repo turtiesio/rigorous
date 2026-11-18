@@ -1,0 +1,14 @@
+[package]
+name = "rigor-kernel"
+version = "0.1.0"
+edition = "2021"
+description = "The trusted substrate: names, hash-chained log, units, composition, runtime"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
+sha2 = "0.10"
+bincode = "1"
+
+[lints]
+workspace = true

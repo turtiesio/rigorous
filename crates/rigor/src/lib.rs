@@ -53,18 +53,19 @@
 //! assert!(Time(3) < Amount(4));
 //! ```
 
-pub mod actors;
-pub mod adapters;
-pub mod chain;
-pub mod gitlog;
-pub mod impact;
-pub mod kernel;
-pub mod logic;
-pub mod model;
-pub mod org;
-pub mod registry;
-pub mod scenario;
-pub mod steward;
-pub mod synth;
-pub mod units;
-pub mod world;
+// The layers, re-exported under one roof. The dependency direction is enforced by Cargo:
+//
+//   kernel, logic            know nothing of institutions
+//   institution              knows the kernel and the reasoners; performs no I/O
+//   adapters (host, git, chain, registry)   translate the outside world into typed events
+//   demo, steward            applications
+pub use rigor_adapter_chain as chain;
+pub use rigor_adapter_git as gitlog;
+pub use rigor_adapter_host as adapters;
+pub use rigor_adapter_registry as registry;
+pub use rigor_demo::{actors, scenario, synth};
+pub use rigor_institution::{impact, model, org, units, world};
+pub use rigor_kernel as kernel;
+pub use rigor_logic as logic;
+pub use rigor_mind as mind;
+pub use rigor_steward as steward;

@@ -1,0 +1,14 @@
+[package]
+name = "rigor-adapter-registry"
+version = "0.1.0"
+edition = "2021"
+description = "Adapter: a package registry"
+
+[dependencies]
+rigor-kernel = { path = "../../kernel" }
+rigor-institution = { path = "../../institution" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

@@ -78,37 +78,46 @@ fn main() -> Result<(), Failed> {
     );
 
     println!("## 1. Size of what must be trusted\n");
-    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
     let layers: [(&str, &[&str]); 5] = [
-        ("Kernel: names, log, units, composition, runtime", &["kernel/base.rs", "kernel/log.rs", "kernel/unit.rs", "kernel/runtime.rs", "kernel/mod.rs"]),
-        ("Reasoners: grounded argumentation, sorted stratified Datalog", &["logic/argue.rs", "logic/datalog.rs"]),
-        ("Typed vocabulary: identifiers, events, acts, rule set", &["model/ids.rs", "model/event.rs", "model/rules.rs"]),
         (
-            "Institutional units: authority, ledger, evidence, commitments, adjudication, governance",
+            "Kernel crate: names, log, units, composition, runtime",
+            &["kernel/src/base.rs", "kernel/src/log.rs", "kernel/src/unit.rs", "kernel/src/runtime.rs", "kernel/src/lib.rs"],
+        ),
+        ("Logic crate: grounded argumentation, sorted stratified Datalog", &["logic/src/argue.rs", "logic/src/datalog.rs"]),
+        (
+            "Institution crate, vocabulary: identifiers, events, acts, rule set",
+            &["institution/src/model/ids.rs", "institution/src/model/event.rs", "institution/src/model/rules.rs"],
+        ),
+        (
+            "Institution crate, units: authority, ledger, evidence, commitments, adjudication, governance, reflector, envoy",
             &[
-                "units/institution.rs",
-                "units/ledger.rs",
-                "units/epistemic.rs",
-                "units/norms.rs",
-                "units/adjudicator.rs",
-                "units/governance.rs",
-                "units/meter.rs",
+                "institution/src/units/institution.rs",
+                "institution/src/units/ledger.rs",
+                "institution/src/units/epistemic.rs",
+                "institution/src/units/norms.rs",
+                "institution/src/units/adjudicator.rs",
+                "institution/src/units/governance.rs",
+                "institution/src/units/meter.rs",
+                "institution/src/units/reflector.rs",
+                "institution/src/units/envoy.rs",
             ],
         ),
         (
-            "Not trusted for soundness: standard rules, explorer, impact, adapters, actors, scenario, facade, git adapter, steward",
+            "Not trusted for soundness: standard rules, facade, explorer, impact, adapter crates, demo crate, steward crate",
             &[
-                "org.rs",
-                "kernel/explore.rs",
-                "impact.rs",
-                "adapters.rs",
-                "actors.rs",
-                "scenario.rs",
-                "world.rs",
-                "synth.rs",
-                "gitlog.rs",
-                "chain.rs",
-                "steward.rs",
+                "institution/src/org.rs",
+                "institution/src/world.rs",
+                "institution/src/impact.rs",
+                "kernel/src/explore.rs",
+                "adapters/host/src/lib.rs",
+                "adapters/git/src/lib.rs",
+                "adapters/chain/src/lib.rs",
+                "adapters/registry/src/lib.rs",
+                "demo/src/actors.rs",
+                "demo/src/scenario.rs",
+                "demo/src/synth.rs",
+                "steward/src/lib.rs",
             ],
         ),
     ];
