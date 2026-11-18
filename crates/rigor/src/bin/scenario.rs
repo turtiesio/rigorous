@@ -60,6 +60,7 @@ fn report(w: &World) -> Result<(), Error> {
         let t = r.terms();
         let cond = match &t.cons {
             Condition::Holds(p) => p.to_string(),
+            Condition::Unrefuted(p) => format!("unrefuted {p}"),
             Condition::Paid { at_least, .. } => format!("paid >= {}", at_least.0),
         };
         let src = match (&r.commitment.source, &t.basis) {

@@ -54,6 +54,10 @@ pointwise on `p`'s resources, and `expires(c) ≤ expires(p)`. Delegation create
 **2.3** The chain of `c` is *valid at time t* iff no capability on it is revoked or expired.
 `revoke(x)` is permitted to any issuer on `x`'s chain; it invalidates every chain through `x`.
 
+**2.3a Admission.** `admit(m)` adds a member with the same root capabilities as a founding one. It is an
+ordinary act: it counts only for a holder of a capability that includes it, which only the constitution can
+create.
+
 **2.4 Count-as.** `do(a, action, args, c)` by actor `a` **counts as** `ok.action(args)` iff `a` is a member,
 holds `c`, the chain of `c` is valid, `action ∈ actions(c)`, `args` agree with `scope(c)`, and (for transfers)
 the amount fits the remaining budget of *every* capability on the chain. Otherwise the event `denied` is
@@ -90,7 +94,13 @@ any change to those re-evaluates the connected component it touches.
 `prop P` (holds at the time `P` became accepted, while it is accepted) or `event (kind, match)` (holds from
 the first matching institutional event; irrevocable).
 
-**5.2 Status** is the function (first matching line wins):
+A third condition, `unrefuted P`, may appear only as a consequent. It turns the commitment into a
+*maintenance* commitment: instead of "bring P about by the deadline" it means "let P not come to be refuted
+until the deadline". Its status is: **violated** while `P` stands refuted and that refutation was learned at
+or before the deadline; otherwise **satisfied** once the deadline has passed; otherwise **detached**. No
+evidence in favour of `P` is needed, and a refutation after the deadline does not reach back.
+
+**5.2 Status** of an ordinary (achievement) commitment is the function (first matching line wins):
 
 | Status | When |
 |---|---|
@@ -123,6 +133,25 @@ The rule set `ρ = (evidence, norms, responsibility, governance)` is data with a
 enacted when approved by `quorum(ρ)` distinct holders of the `approve` power, provided the patched rule set
 (i) leaves entrenched paths untouched, (ii) has safe, stratified responsibility rules, (iii) has an acyclic
 template tag graph, and (iv) keeps `quorum ≥ 1`. Enactment emits `rules.changed`; `epi` and `adj` re-evaluate.
+
+## 7a. Persistence, snapshots and migration
+
+A **snapshot** is the pair (position in the log, encoded state of every unit) with a digest. Resuming from a
+snapshot and then processing the later stimuli yields the same state and the same chain head as processing
+everything (tested, on real data). After a snapshot or a save, the runtime may **compact**: forget retained
+entries while the chain continues. A snapshot is trusted input.
+
+A stored log's chain is **verified from its bytes**: each link is re-assembled from the stored text of its
+fields, so verification does not depend on the event vocabulary of the build that reads it. **Migration** of
+a log in an older schema verifies the old chain, brings each external stimulus up to the current vocabulary
+by a total function, and replays them into a new log whose first event names the schema and chain head it
+continues from.
+
+## 7b. Reflection
+
+A **reflector** is an ordinary member that records, per method of evidence, how often a proposition accepted
+on that method was later refuted. Past a threshold it issues an ordinary `propose` act to lower the method's
+rank. It holds a charter to propose and nothing else: enactment needs the quorum of §7.
 
 ## 8. Typing discipline
 

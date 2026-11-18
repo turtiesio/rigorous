@@ -132,16 +132,29 @@ pub fn standard_rules(t: &Trusted) -> Rules {
             self_support: false,
         },
         norms: NormRules {
-            on_violation: vec![ViolationTemplate {
-                tag: Tag::Task,
-                create: Template {
-                    debtor: PartyExpr::RoleHolder(Role::Auditor),
-                    creditor: PartyExpr::Creditor,
-                    cons: ConsExpr::Audited,
-                    within: 10,
-                    tags: tags(&[Tag::Audit]),
+            on_violation: vec![
+                ViolationTemplate {
+                    tag: Tag::Task,
+                    create: Template {
+                        debtor: PartyExpr::RoleHolder(Role::Auditor),
+                        creditor: PartyExpr::Creditor,
+                        cons: ConsExpr::Audited,
+                        within: 10,
+                        tags: tags(&[Tag::Audit]),
+                    },
                 },
-            }],
+                // A standing duty that lapsed must be put right, and that is tracked as a duty of its own.
+                ViolationTemplate {
+                    tag: Tag::Upkeep,
+                    create: Template {
+                        debtor: PartyExpr::Debtor,
+                        creditor: PartyExpr::Creditor,
+                        cons: ConsExpr::Remediated,
+                        within: 7,
+                        tags: tags(&[Tag::Remediation]),
+                    },
+                },
+            ],
             on_verdict: vec![
                 VerdictTemplate {
                     finding: Finding::Liable,
@@ -166,6 +179,7 @@ pub fn standard_rules(t: &Trusted) -> Rules {
                     },
                 },
             ],
+            maintenance_period: 30 * 24 * 3600,
         },
         responsibility: ResponsibilityRules { rules: responsibility_v1(), findings: Finding::ALL.into_iter().collect(), retroactive: true },
         governance: GovernanceRules { quorum: 2, entrenched: [RulePath::Entrenched, RulePath::SelfSupport].into_iter().collect() },

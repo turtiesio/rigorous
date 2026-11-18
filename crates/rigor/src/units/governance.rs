@@ -11,14 +11,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const GOV: Name = Name::lit("gov");
 
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Stage {
     Open,
     Enacted,
     Stale,
 }
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 struct Proposal {
     amendments: Vec<Amendment>,
     base: Version,
@@ -27,7 +27,7 @@ struct Proposal {
 }
 
 /// One entry in the history of the rule set.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Enactment {
     pub version: Version,
     pub digest: ContentDigest,
@@ -35,7 +35,7 @@ pub struct Enactment {
     pub by: BTreeSet<ActorId>,
 }
 
-#[derive(Clone, Debug, Hash, Default)]
+#[derive(Clone, Debug, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub struct Governance {
     now: Time,
     version: Version,
@@ -142,6 +142,7 @@ impl Leaf<Event> for Governance {
                     RulePath::Trust,
                     RulePath::SelfSupport,
                     RulePath::Templates,
+                    RulePath::Period,
                     RulePath::Responsibility,
                     RulePath::Retroactive,
                     RulePath::Quorum,

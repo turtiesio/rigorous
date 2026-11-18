@@ -66,7 +66,10 @@ pub fn constitution(rules: Rules) -> Constitution {
             m(CI, MemberKind::Service),
             Member { id: AUDITOR, kind: MemberKind::Human, principal: None, role: Some(Role::Auditor) },
         ],
-        charters: vec![Charter { name: GOV_ALICE, holder: ALICE, actions: govern.clone() }, Charter { name: GOV_AUDITOR, holder: AUDITOR, actions: govern }],
+        charters: vec![
+            Charter { name: GOV_ALICE, holder: ALICE, actions: govern.clone(), delegable: false },
+            Charter { name: GOV_AUDITOR, holder: AUDITOR, actions: govern, delegable: false },
+        ],
         balances: vec![(ALICE, CREDIT, Amount(100)), (DEPLOYER, CREDIT, Amount(40))],
         rules,
     }
@@ -113,7 +116,7 @@ pub fn budget(to: ActorId, from: ActorId, limit: u64, delegable: bool) -> Act {
     Act::Delegate(Grant {
         to,
         actions: std::iter::once(ActionKind::Transfer).collect(),
-        scope: Scope { from: Some(from) },
+        scope: Scope { from: Some(from), purpose: None },
         limits: std::iter::once((CREDIT, Amount(limit))).collect(),
         expires: Some(Time(20)),
         delegable,
@@ -277,7 +280,7 @@ pub fn run(cast: Cast, amend: bool, mut say: impl FnMut(&str)) -> Result<(World,
             .into_iter()
             .filter_map(|r| match &r.terms().cons {
                 Condition::Holds(p) => Some(p.clone()),
-                Condition::Paid { .. } => None,
+                Condition::Unrefuted(_) | Condition::Paid { .. } => None,
             })
             .collect())
     };

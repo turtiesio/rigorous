@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const NORMS: Name = Name::lit("norms");
 
 /// An explicit operation performed on a commitment.
-#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum Op {
     Released,
     Cancelled,
@@ -27,7 +27,7 @@ enum Op {
     Breach,
 }
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Record {
     pub commitment: Commitment,
     op: Option<Op>,
@@ -44,13 +44,14 @@ impl Record {
     }
 }
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Norms {
     now: Time,
     version: Version,
     rules: NormRules,
     c: BTreeMap<CommitmentId, Record>,
-    prop: BTreeMap<Prop, (Assessment, Option<Time>)>,
+    /// Per proposition: its assessment, since when it has been accepted, and when this unit learned of it.
+    prop: BTreeMap<Prop, (Assessment, Option<Time>, Time)>,
     by_prop: BTreeMap<Prop, BTreeSet<CommitmentId>>,
     watch: BTreeSet<CommitmentId>,
     due: BTreeMap<Time, BTreeSet<CommitmentId>>,
@@ -63,7 +64,7 @@ impl Default for Norms {
         Self {
             now: Time::default(),
             version: Version::default(),
-            rules: NormRules { on_violation: Vec::new(), on_verdict: Vec::new() },
+            rules: NormRules { on_violation: Vec::new(), on_verdict: Vec::new(), maintenance_period: 1 },
             c: BTreeMap::new(),
             prop: BTreeMap::new(),
             by_prop: BTreeMap::new(),
@@ -115,9 +116,11 @@ impl Norms {
         match cond {
             None => Some(r.created_at),
             Some(Condition::Holds(p)) => match self.prop.get(p) {
-                Some((Assessment::Accepted, since)) => *since,
+                Some((Assessment::Accepted, since, _)) => *since,
                 Some(_) | None => None,
             },
+            // A maintenance condition is never "brought about": see `evaluate`.
+            Some(Condition::Unrefuted(_)) => None,
             Some(Condition::Paid { .. }) => occurred,
         }
     }
@@ -139,6 +142,19 @@ impl Norms {
             return Status::Violated;
         }
         let late = self.now > t.deadline;
+        if let Condition::Unrefuted(p) = &t.cons {
+            // Maintenance: violated while the proposition stands refuted, if the refutation came
+            // within the period; discharged when the period ends without one.
+            let detached = self.when(r, t.ant.as_ref(), r.ant_at).is_some_and(|at| at <= t.deadline);
+            let refuted_in_time = matches!(self.prop.get(p), Some((Assessment::Refuted, _, learned)) if *learned <= t.deadline);
+            return match (detached, refuted_in_time, late) {
+                (false, _, true) => Status::Expired,
+                (false, _, false) => Status::Conditional,
+                (true, true, _) => Status::Violated,
+                (true, false, true) => Status::Satisfied,
+                (true, false, false) => Status::Detached,
+            };
+        }
         match self.when(r, t.ant.as_ref(), r.ant_at) {
             Some(at) if at <= t.deadline => {
                 if late {
@@ -163,6 +179,10 @@ impl Norms {
             out.push(reject(NormError::DeadlineInThePast));
             return Ok(None);
         }
+        if matches!(terms.ant, Some(Condition::Unrefuted(_))) {
+            out.push(reject(NormError::MaintenanceAsAntecedent));
+            return Ok(None);
+        }
         if terms.parent.is_some_and(|p| !self.c.contains_key(&p)) {
             out.push(reject(NormError::UnknownParent));
             return Ok(None);
@@ -175,7 +195,7 @@ impl Norms {
         let mut watched = false;
         for cond in terms.ant.iter().chain(std::iter::once(&terms.cons)) {
             match cond {
-                Condition::Holds(p) => {
+                Condition::Holds(p) | Condition::Unrefuted(p) => {
                     let _ = self.by_prop.entry(p.clone()).or_default().insert(id);
                 }
                 Condition::Paid { .. } => watched = true,
@@ -311,7 +331,7 @@ impl Norms {
         let now = self.now;
         let hits = |cond: Option<&Condition>| match cond {
             Some(Condition::Paid { from, to, resource, at_least }) => tr.from == *from && tr.to == *to && tr.resource == *resource && tr.amount >= *at_least,
-            Some(Condition::Holds(_)) | None => false,
+            Some(Condition::Holds(_) | Condition::Unrefuted(_)) | None => false,
         };
         let mut hit = Vec::new();
         let mut done = Vec::new();
@@ -371,7 +391,7 @@ impl Leaf<Event> for Norms {
         NORMS
     }
     fn inputs(&self) -> BTreeSet<Kind> {
-        [Kind::Member, Kind::Tick, Kind::RulesChanged, Kind::Ok, Kind::Assessed, Kind::Verdict, Kind::Transferred].into_iter().collect()
+        [Kind::Member, Kind::Expelled, Kind::Tick, Kind::RulesChanged, Kind::Ok, Kind::Assessed, Kind::Verdict, Kind::Transferred].into_iter().collect()
     }
     fn outputs(&self) -> BTreeSet<Kind> {
         [Kind::NormCreated, Kind::NormStatus, Kind::NormRejected, Kind::NormAssigned, Kind::NormSkipped].into_iter().collect()
@@ -380,10 +400,13 @@ impl Leaf<Event> for Norms {
         let mut out = Vec::new();
         match env.event {
             Event::Member(m) => {
+                // A member holds at most the role last given to them.
+                self.roles.retain(|_, who| *who != m.id);
                 if let Some(role) = m.role {
                     let _ = self.roles.insert(role, m.id.clone());
                 }
             }
+            Event::Expelled { member } => self.roles.retain(|_, who| who != member),
             Event::RulesChanged(rc) => {
                 self.rules = rc.rules.norms.clone();
                 self.version = rc.version;
@@ -410,7 +433,7 @@ impl Leaf<Event> for Norms {
             }
             Event::Ok { by, act, .. } => self.operate(&mut out, by, act)?,
             Event::Assessed { prop, assessment, since, .. } => {
-                let _ = self.prop.insert(prop.clone(), (*assessment, *since));
+                let _ = self.prop.insert(prop.clone(), (*assessment, *since, self.now));
                 self.refresh(&mut out, self.depending_on(prop))?;
             }
             Event::Verdict(v) => self.on_verdict(&mut out, v.commitment, &v.findings)?,

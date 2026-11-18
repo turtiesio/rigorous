@@ -3,7 +3,7 @@
 use std::hash::{Hash, Hasher};
 
 /// Counts work done, for measurements. Ignored by hashing so that it never affects state digests.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct Meter(pub u64);
 
 impl Meter {

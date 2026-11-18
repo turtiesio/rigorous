@@ -46,7 +46,7 @@ fn random_delegation_trees_never_amplify_authority() {
                 let grant = Grant {
                     to: rng.pick(&who).clone(),
                     actions: std::iter::once(ActionKind::Transfer).collect(),
-                    scope: Scope { from: Some(rng.pick(&who).clone()) },
+                    scope: Scope { from: Some(rng.pick(&who).clone()), purpose: None },
                     limits: std::iter::once((CREDIT, Amount(1 + rng.below_u64(80)))).collect(),
                     expires: *rng.pick(&[None, Some(Time(5)), Some(Time(50))]),
                     delegable: rng.percent(80),
@@ -324,4 +324,72 @@ fn amendments_touch_only_their_path() {
         assert_ne!(after, r);
         assert_eq!(after.norms, r.norms);
     }
+}
+
+#[test]
+fn exact_impact_always_lies_inside_the_static_cone() {
+    // Random worlds of delegation chains with random extra evidence; random hypothetical
+    // stimuli. Every existing judgment that the stimulus really changes is inside the bound
+    // computed without executing anything; every new commitment hangs off something inside it.
+    use rigor::impact::{cone, what_if, Change, Judgment};
+    use rigor::synth::{link, world_n, AUDITOR as S_AUDITOR, DEPLOYER as S_DEPLOYER, MONITOR as S_MONITOR, WORKER};
+    let mut cases = 0;
+    let mut changed_something = 0;
+    for seed in 0..60 {
+        let mut rng = Rng::new(seed);
+        let (n, chain) = (1 + rng.below(4), 1 + rng.below(3));
+        let mut w = world_n(n, chain).unwrap();
+        // Roughen it: some links already rebutted, some rebuttals undercut, some derived evidence.
+        for _ in 0..rng.below(4) {
+            let p = link(rng.below(n), rng.below(chain)).unwrap();
+            let entries = w.act(&S_MONITOR, attest(About::Rebuts(p), Method::Probe, "rough")).unwrap();
+            if rng.percent(40) {
+                if let Some(e) = entries.iter().find_map(|e| match &e.event {
+                    Event::EvidenceRecorded(ev) => Some(ev.id),
+                    _ => None,
+                }) {
+                    let _ = w.act(&S_AUDITOR, attest(About::Undercuts(e), Method::Audit, "rough")).unwrap();
+                }
+            }
+        }
+        for _ in 0..6 {
+            let p = link(rng.below(n), rng.below(chain)).unwrap();
+            let ids: Vec<EvidenceId> = w.epi().unwrap().evidence().map(|e| e.id).collect();
+            let (actor, act, change) = match rng.below(4) {
+                0 => (S_MONITOR, attest(About::Rebuts(p.clone()), Method::Probe, "what if"), Change::Prop(p)),
+                1 => (S_AUDITOR, attest(About::Supports(p.clone()), Method::Audit, "what if"), Change::Prop(p)),
+                2 => {
+                    let e = *rng.pick(&ids);
+                    (S_AUDITOR, attest(About::Undercuts(e), Method::Audit, "what if"), Change::Evidence(e))
+                }
+                _ => {
+                    let e = w.epi().unwrap().evidence().nth(rng.below(ids.len())).unwrap();
+                    let _ = (&WORKER, &S_DEPLOYER);
+                    (e.source.clone(), Act::Retract { evidence: e.id }, Change::Evidence(e.id))
+                }
+            };
+            let bound = cone(&w, &change).unwrap();
+            let event = Event::Do { act, cap: None };
+            let exact = what_if(&w, &actor.0, event.clone()).unwrap();
+            let mut after = w.fork();
+            let _ = after.inject(&actor.0, event.clone()).unwrap();
+            for (j, (before, _)) in &exact {
+                match (j, before) {
+                    (Judgment::Commitment(c), None) => {
+                        let of = after.norms().unwrap().record(c).unwrap().terms().basis.as_ref().unwrap().of;
+                        assert!(bound.contains(&Judgment::Commitment(of)), "seed {seed}: new commitment outside the cone");
+                    }
+                    _ => assert!(bound.contains(j), "seed {seed}: {j:?} changed outside the cone of {change:?}"),
+                }
+            }
+            cases += 1;
+            changed_something += usize::from(!exact.is_empty());
+            // Sometimes let the hypothetical become real, so later cases start from revised worlds.
+            if rng.percent(50) {
+                let _ = w.inject(&actor.0, event).unwrap();
+            }
+        }
+    }
+    assert_eq!(cases, 360);
+    assert!(changed_something > 100, "the property must not hold vacuously: {changed_something}");
 }

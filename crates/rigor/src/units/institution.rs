@@ -15,7 +15,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const INST: Name = Name::lit("inst");
 
-#[derive(Clone, Debug, Hash, Default)]
+#[derive(Clone, Debug, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub struct Institution {
     now: Time,
     founded: bool,
@@ -35,6 +35,9 @@ pub fn attenuates(child: &Capability, parent: &Capability) -> Result<(), Attenua
     }
     if parent.scope.from.is_some() && child.scope.from != parent.scope.from {
         return Err(AttenuationError::ScopeWiderThanParent);
+    }
+    if parent.scope.purpose.is_some() && child.scope.purpose != parent.scope.purpose {
+        return Err(AttenuationError::PurposeDiffersFromParent);
     }
     for (r, lim) in &parent.limits {
         if child.limits.get(r).is_none_or(|l| l > lim) {
@@ -127,6 +130,13 @@ impl Institution {
         let _ = self.caps.insert(id, cap);
     }
 
+    fn enrol(&mut self, m: &Member) {
+        let _ = self.members.insert(m.id.clone(), m.clone());
+        self.root(CapId::Base(m.id.clone()), m.id.clone(), base_actions(), Scope::default(), false);
+        let own = Scope { from: Some(m.id.clone()), purpose: None };
+        self.root(CapId::Own(m.id.clone()), m.id.clone(), std::iter::once(ActionKind::Transfer).collect(), own, true);
+    }
+
     fn attempt(&mut self, by: &ActorId, act: &Act, cap: Option<&CapId>) -> Result<Result<Event, DenyReason>, LeafError> {
         if !self.members.contains_key(by) {
             return Ok(Err(DenyReason::NotAMember));
@@ -148,6 +158,12 @@ impl Institution {
         if !held.actions.contains(&act.kind()) {
             return Ok(Err(DenyReason::ActionNotGranted));
         }
+        if let Some(purpose) = &held.scope.purpose {
+            match act {
+                Act::Transfer(t) if t.memo == crate::model::Memo::Purpose(purpose.clone()) => {}
+                _ => return Ok(Err(DenyReason::OutOfScope)),
+            }
+        }
         if let Some(only) = &held.scope.from {
             match act {
                 Act::Transfer(t) if t.from == *only => {}
@@ -164,6 +180,25 @@ impl Institution {
                 }
                 let _ = self.revoked.insert(target.clone());
             }
+            Act::Admit(m) => {
+                if self.members.contains_key(&m.id) {
+                    return Ok(Err(DenyReason::AlreadyAMember));
+                }
+                self.enrol(m);
+            }
+            Act::Expel { member } => {
+                if self.members.remove(member).is_none() {
+                    return Ok(Err(DenyReason::UnknownMember));
+                }
+                // What they hold dies with their membership (every attempt needs a member);
+                // what they handed on is revoked explicitly.
+                let issued: Vec<CapId> = self.caps.values().filter(|c| c.issuer == Issuer::Member(member.clone())).map(|c| c.id.clone()).collect();
+                self.revoked.extend(issued);
+            }
+            Act::SetRole { member, role } => match self.members.get_mut(member) {
+                Some(m) => m.role = *role,
+                None => return Ok(Err(DenyReason::UnknownMember)),
+            },
             Act::Transfer(t) => {
                 if t.amount == Amount(0) {
                     return Ok(Err(DenyReason::ZeroAmount));
@@ -228,7 +263,7 @@ impl Leaf<Event> for Institution {
         [Kind::Genesis, Kind::Tick, Kind::Do, Kind::TransferFailed].into_iter().collect()
     }
     fn outputs(&self) -> BTreeSet<Kind> {
-        [Kind::Ok, Kind::Delegated, Kind::Denied, Kind::Member].into_iter().collect()
+        [Kind::Ok, Kind::Delegated, Kind::Denied, Kind::Member, Kind::Expelled].into_iter().collect()
     }
     fn on(&mut self, env: &Envelope<'_, Event>) -> Result<Vec<Event>, LeafError> {
         let mut out = Vec::new();
@@ -236,14 +271,11 @@ impl Leaf<Event> for Institution {
             Event::Genesis(c) if !self.founded => {
                 self.founded = true;
                 for m in &c.members {
-                    let _ = self.members.insert(m.id.clone(), m.clone());
-                    self.root(CapId::Base(m.id.clone()), m.id.clone(), base_actions(), Scope::default(), false);
-                    let own = Scope { from: Some(m.id.clone()) };
-                    self.root(CapId::Own(m.id.clone()), m.id.clone(), [ActionKind::Transfer].into_iter().collect(), own, true);
+                    self.enrol(m);
                     out.push(Event::Member(m.clone()));
                 }
                 for ch in &c.charters {
-                    self.root(CapId::Charter(ch.name.clone()), ch.holder.clone(), ch.actions.clone(), Scope::default(), false);
+                    self.root(CapId::Charter(ch.name.clone()), ch.holder.clone(), ch.actions.clone(), Scope::default(), ch.delegable);
                 }
             }
             Event::Tick(t) => self.now = self.now.max(*t),
@@ -263,10 +295,19 @@ impl Leaf<Event> for Institution {
                     Some(n) => self.attempt(&ActorId(n.clone()), act, cap.as_ref())?,
                     None => Err(DenyReason::NotAMember),
                 };
-                out.push(match verdict {
-                    Ok(ev) => ev,
-                    Err(reason) => Event::Denied { by: path, act: act.clone(), via: cap.clone(), reason },
-                });
+                match verdict {
+                    Ok(ev) => {
+                        out.push(ev);
+                        // Admission is announced so that every unit learns of the new member.
+                        match act {
+                            Act::Admit(m) => out.push(Event::Member(m.clone())),
+                            Act::Expel { member } => out.push(Event::Expelled { member: member.clone() }),
+                            Act::SetRole { member, .. } => out.extend(self.members.get(member).cloned().map(Event::Member)),
+                            _ => {}
+                        }
+                    }
+                    Err(reason) => out.push(Event::Denied { by: path, act: act.clone(), via: cap.clone(), reason }),
+                }
             }
             _ => {}
         }

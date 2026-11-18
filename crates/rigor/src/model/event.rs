@@ -1,8 +1,8 @@
 //! The closed vocabulary of events.
 
 use super::ids::{
-    ActorId, Amount, ArtifactId, CapId, CharterName, CommitmentId, ContentDigest, EvidenceId, ProposalId, Requirement, Resource, TaskName, TemplateIx, Time,
-    Version,
+    ActorId, Amount, ArtifactId, CapId, ChangeId, CharterName, CommitmentId, ContentDigest, EvidenceId, ProposalId, Requirement, Resource, TaskName,
+    TemplateIx, Time, Version,
 };
 use super::rules::{Amendment, RFact, RProof, RulePath, Rules, RulesError};
 use crate::kernel::{Name, Path, Payload};
@@ -35,6 +35,10 @@ pub enum Tag {
     Remediation,
     Refund,
     Conformance,
+    /// A change submitted to a body of work.
+    Change,
+    /// A standing duty of a project towards itself.
+    Upkeep,
 }
 
 /// How a piece of evidence was obtained.
@@ -46,6 +50,8 @@ pub enum Method {
     Probe,
     Audit,
     Inference,
+    /// A recorded decision to undo something.
+    Reversal,
     Hearsay,
 }
 
@@ -118,6 +124,10 @@ pub enum Prop {
     Remediated(CommitmentId),
     Audited(CommitmentId),
     Conforms(Requirement),
+    /// The change is sound (should stand).
+    Sound(ChangeId),
+    /// The snapshot with this digest is the state its log really produces.
+    Faithful(ContentDigest),
     Fact(Name),
 }
 
@@ -129,6 +139,8 @@ impl fmt::Display for Prop {
             Self::Remediated(c) => write!(f, "remediated({c})"),
             Self::Audited(c) => write!(f, "audited({c})"),
             Self::Conforms(r) => write!(f, "conforms({r})"),
+            Self::Sound(c) => write!(f, "sound({c})"),
+            Self::Faithful(d) => write!(f, "faithful({d})"),
             Self::Fact(n) => write!(f, "fact({n})"),
         }
     }
@@ -151,6 +163,9 @@ pub enum ActionKind {
     Request,
     Propose,
     Approve,
+    Admit,
+    Expel,
+    SetRole,
 }
 
 /// What a capability is restricted to.
@@ -158,6 +173,9 @@ pub enum ActionKind {
 pub struct Scope {
     /// If set, transfers may only draw on this account.
     pub from: Option<ActorId>,
+    /// If set, the capability is good for one named purpose only: every transfer under it must
+    /// carry that purpose as its memo (as a signature binds to one transaction).
+    pub purpose: Option<Name>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -173,6 +191,8 @@ pub struct Grant {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Memo {
     None,
+    /// Part of the named settlement.
+    Purpose(Name),
     Payment(Task),
     Refund(CommitmentId),
 }
@@ -217,6 +237,10 @@ pub struct Attestation {
 pub enum Condition {
     /// Holds while the proposition is assessed accepted (revisable).
     Holds(Prop),
+    /// A maintenance condition: it must not come to be refuted while the commitment is in force.
+    /// As a consequent it turns the commitment from "bring this about by the deadline" into
+    /// "let this not be defeated until the deadline". It cannot be an antecedent.
+    Unrefuted(Prop),
     /// Holds once a transfer of at least this much has occurred (irrevocable).
     Paid { from: ActorId, to: ActorId, resource: Resource, at_least: Amount },
 }
@@ -254,18 +278,46 @@ pub struct Request {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Act {
     Delegate(Grant),
-    Revoke { target: CapId },
+    Revoke {
+        target: CapId,
+    },
     Transfer(Transfer),
-    Claim { prop: Prop },
+    Claim {
+        prop: Prop,
+    },
     Attest(Attestation),
-    Retract { evidence: EvidenceId },
+    Retract {
+        evidence: EvidenceId,
+    },
     Commit(Offer),
-    Release { id: CommitmentId },
-    Cancel { id: CommitmentId },
-    Assign { id: CommitmentId, to: ActorId },
+    Release {
+        id: CommitmentId,
+    },
+    Cancel {
+        id: CommitmentId,
+    },
+    Assign {
+        id: CommitmentId,
+        to: ActorId,
+    },
     Request(Request),
-    Propose { amendments: Vec<Amendment> },
-    Approve { id: ProposalId },
+    Propose {
+        amendments: Vec<Amendment>,
+    },
+    Approve {
+        id: ProposalId,
+    },
+    /// Admit a new member (a power granted by charter).
+    Admit(Member),
+    /// Remove a member's standing. Their obligations remain; everything they delegated is revoked.
+    Expel {
+        member: ActorId,
+    },
+    /// Give a member a role, or take it away.
+    SetRole {
+        member: ActorId,
+        role: Option<Role>,
+    },
 }
 
 impl Act {
@@ -285,6 +337,9 @@ impl Act {
             Self::Request(_) => ActionKind::Request,
             Self::Propose { .. } => ActionKind::Propose,
             Self::Approve { .. } => ActionKind::Approve,
+            Self::Admit(_) => ActionKind::Admit,
+            Self::Expel { .. } => ActionKind::Expel,
+            Self::SetRole { .. } => ActionKind::SetRole,
         }
     }
 }
@@ -304,6 +359,8 @@ pub struct Charter {
     pub name: CharterName,
     pub holder: ActorId,
     pub actions: BTreeSet<ActionKind>,
+    /// Whether the holder may delegate (attenuated) parts of it.
+    pub delegable: bool,
 }
 
 /// The genesis payload: the only trust anchor.
@@ -339,6 +396,7 @@ pub struct Capability {
 pub enum AttenuationError {
     ActionsExceedParent,
     ScopeWiderThanParent,
+    PurposeDiffersFromParent,
     LimitExceedsParent(Resource),
     ExpiryExceedsParent,
 }
@@ -362,6 +420,8 @@ pub enum DenyReason {
     NotAnIssuerOnTheChain,
     ZeroAmount,
     BudgetExceeded(CapId),
+    AlreadyAMember,
+    UnknownMember,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -439,6 +499,8 @@ pub struct Commitment {
 pub enum NormError {
     DeadlineInThePast,
     UnknownParent,
+    /// A maintenance condition was used as an antecedent.
+    MaintenanceAsAntecedent,
     Duplicate(CommitmentId),
     NoSuchLiveCommitment,
     /// Only the creditor may release or assign; only the debtor may cancel.
@@ -511,6 +573,17 @@ pub type Fault = crate::kernel::Fault<Kind, Failure>;
 /// A leaf error in a world of institutional events.
 pub type LeafError = crate::kernel::LeafError<Failure>;
 
+/// Bring an external stimulus written under an older log schema up to the current vocabulary.
+/// Total: every older event has exactly one current form. (Schema 1 differed from 2 only in
+/// the file format, not in the events, so this step is the identity.)
+#[must_use]
+pub fn upcast(from_schema: u32, event: serde_json::Value) -> serde_json::Value {
+    // One step per schema boundary is applied here, oldest first. There are none yet: the only
+    // boundary so far (1 -> 2) changed the file's header, not any event.
+    let _ = from_schema;
+    event
+}
+
 /// A unit of work inside a service.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Job {
@@ -525,39 +598,120 @@ pub enum Event {
     // -- from outside the system
     Genesis(Box<Constitution>),
     Tick(Time),
-    ArtifactChanged { artifact: ArtifactId, digest: ContentDigest },
+    ArtifactChanged {
+        artifact: ArtifactId,
+        digest: ContentDigest,
+    },
     // -- kernel
     Settle,
-    Scoped { entity: Name, inner: Box<Event> },
+    Scoped {
+        entity: Name,
+        inner: Box<Event>,
+    },
+    /// This log continues one written in an older format, whose chain was verified up to `old_head`.
+    Migrated {
+        from_schema: u32,
+        old_head: crate::kernel::Digest,
+        stimuli: u64,
+    },
     // -- brute: anyone may emit; the kernel stamps who did
-    Do { act: Act, cap: Option<CapId> },
-    Signal { to: ActorId, prop: Prop, value: bool },
+    Do {
+        act: Act,
+        cap: Option<CapId>,
+    },
+    Signal {
+        to: ActorId,
+        prop: Prop,
+        value: bool,
+    },
     // -- authority (only the institution emits these)
-    Ok { by: ActorId, via: CapId, act: Act },
+    Ok {
+        by: ActorId,
+        via: CapId,
+        act: Act,
+    },
     Delegated(Capability),
-    Denied { by: Path, act: Act, via: Option<CapId>, reason: DenyReason },
+    Denied {
+        by: Path,
+        act: Act,
+        via: Option<CapId>,
+        reason: DenyReason,
+    },
     Member(Member),
+    Expelled {
+        member: ActorId,
+    },
     // -- resources
-    Transferred { transfer: Transfer, by: ActorId },
-    TransferFailed { transfer: Transfer, via: CapId, reason: LedgerError },
+    Transferred {
+        transfer: Transfer,
+        by: ActorId,
+    },
+    TransferFailed {
+        transfer: Transfer,
+        via: CapId,
+        reason: LedgerError,
+    },
     // -- evidence
     EvidenceRecorded(Evidence),
-    EvidenceRejected { by: ActorId, reason: EvidenceError },
-    EvidenceRetracted { id: EvidenceId, by: ActorId },
-    Assessed { prop: Prop, assessment: Assessment, since: Option<Time>, basis: Vec<EvidenceId>, was: Assessment, rules: Version },
+    EvidenceRejected {
+        by: ActorId,
+        reason: EvidenceError,
+    },
+    EvidenceRetracted {
+        id: EvidenceId,
+        by: ActorId,
+    },
+    Assessed {
+        prop: Prop,
+        assessment: Assessment,
+        since: Option<Time>,
+        basis: Vec<EvidenceId>,
+        was: Assessment,
+        rules: Version,
+    },
     // -- norms
     NormCreated(Commitment),
-    NormStatus { id: CommitmentId, was: Option<Status>, status: Status, at: Time, debtor: ActorId, creditor: ActorId },
-    NormRejected { by: Option<ActorId>, reason: NormError },
-    NormAssigned { id: CommitmentId, creditor: ActorId, by: ActorId },
-    NormSkipped { of: CommitmentId, kind: BasisKind, reason: SkipReason },
+    NormStatus {
+        id: CommitmentId,
+        was: Option<Status>,
+        status: Status,
+        at: Time,
+        debtor: ActorId,
+        creditor: ActorId,
+    },
+    NormRejected {
+        by: Option<ActorId>,
+        reason: NormError,
+    },
+    NormAssigned {
+        id: CommitmentId,
+        creditor: ActorId,
+        by: ActorId,
+    },
+    NormSkipped {
+        of: CommitmentId,
+        kind: BasisKind,
+        reason: SkipReason,
+    },
     // -- responsibility
     Verdict(Verdict),
     // -- governance
     RulesChanged(Box<RulesChanged>),
-    Proposed { id: ProposalId, by: ActorId, base: Version, paths: BTreeSet<RulePath> },
-    Approved { id: ProposalId, by: ActorId, approvals: BTreeSet<ActorId> },
-    GovRejected { by: ActorId, reason: GovError },
+    Proposed {
+        id: ProposalId,
+        by: ActorId,
+        base: Version,
+        paths: BTreeSet<RulePath>,
+    },
+    Approved {
+        id: ProposalId,
+        by: ActorId,
+        approvals: BTreeSet<ActorId>,
+    },
+    GovRejected {
+        by: ActorId,
+        reason: GovError,
+    },
     // -- inside a service
     JobQueued(Job),
     JobDone(Job),
@@ -565,19 +719,21 @@ pub enum Event {
 }
 
 /// One kind per event variant: the alphabet of interfaces.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Kind {
     Genesis,
     Tick,
     ArtifactChanged,
     Settle,
     Scoped,
+    Migrated,
     Do,
     Signal,
     Ok,
     Delegated,
     Denied,
     Member,
+    Expelled,
     Transferred,
     TransferFailed,
     EvidenceRecorded,
@@ -610,12 +766,14 @@ impl Payload for Event {
             Self::ArtifactChanged { .. } => Kind::ArtifactChanged,
             Self::Settle => Kind::Settle,
             Self::Scoped { .. } => Kind::Scoped,
+            Self::Migrated { .. } => Kind::Migrated,
             Self::Do { .. } => Kind::Do,
             Self::Signal { .. } => Kind::Signal,
             Self::Ok { .. } => Kind::Ok,
             Self::Delegated(_) => Kind::Delegated,
             Self::Denied { .. } => Kind::Denied,
             Self::Member(_) => Kind::Member,
+            Self::Expelled { .. } => Kind::Expelled,
             Self::Transferred { .. } => Kind::Transferred,
             Self::TransferFailed { .. } => Kind::TransferFailed,
             Self::EvidenceRecorded(_) => Kind::EvidenceRecorded,

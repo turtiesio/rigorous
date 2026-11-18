@@ -18,7 +18,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const ADJ: Name = Name::lit("adj");
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 struct Known {
     debtor: ActorId,
     creditor: ActorId,
@@ -30,7 +30,7 @@ struct Known {
 
 type Findings = BTreeSet<(Finding, ActorId)>;
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Adjudicator {
     version: Version,
     rules: ResponsibilityRules,
@@ -111,7 +111,25 @@ impl Adjudicator {
 
     fn facts(&self, fam: &BTreeSet<CommitmentId>) -> Vec<RFact> {
         let mut f = Vec::new();
-        for m in self.members.values() {
+        // Only the actors this family mentions, and their principals: the cost of judging a
+        // family must not depend on how many members the institution has.
+        let mut actors: BTreeSet<&ActorId> = BTreeSet::new();
+        for k in fam.iter().filter_map(|id| self.c.get(id)) {
+            actors.extend([&k.debtor, &k.creditor]);
+            if let Some(p) = &k.prop {
+                actors.extend(self.claims.get(p).into_iter().flatten());
+                actors.extend(self.notified.get(p).into_iter().flat_map(BTreeMap::keys));
+            }
+        }
+        let mut pending: Vec<&ActorId> = actors.iter().copied().collect();
+        while let Some(a) = pending.pop() {
+            if let Some(p) = self.members.get(a).and_then(|m| m.principal.as_ref()) {
+                if actors.insert(p) {
+                    pending.push(p);
+                }
+            }
+        }
+        for m in actors.into_iter().filter_map(|a| self.members.get(a)) {
             let a = || Const::Actor(m.id.clone());
             f.push(fact(Pred::Kind, [a(), Const::Kind(m.kind)]));
             if let Some(p) = &m.principal {
@@ -150,8 +168,14 @@ impl Adjudicator {
     }
 
     fn adjudicate(&mut self, root: CommitmentId, out: &mut Vec<Event>) -> Result<(), LeafError> {
-        self.work.add(1);
         let fam = self.family(root);
+        // Nothing violated and nothing previously found: there is nothing to judge or withdraw.
+        let live =
+            fam.iter().any(|id| self.c.get(id).is_some_and(|k| k.status == Some(Status::Violated)) || self.verdicts.get(id).is_some_and(|f| !f.is_empty()));
+        if !live {
+            return Ok(());
+        }
+        self.work.add(1);
         let version = if self.rules.retroactive { self.version } else { self.arose.get(&root).copied().unwrap_or(self.version) };
         let rules = self.versions.get(&version).unwrap_or(&self.rules).clone();
         let model = datalog::solve(&rules.rules, self.facts(&fam)).map_err(|e| LeafError::Broken(Failure::EnactedRulesDoNotCheck(e)))?;
@@ -217,7 +241,7 @@ impl Leaf<Event> for Adjudicator {
             Event::NormCreated(c) => {
                 let t = &c.terms;
                 let prop = match &t.cons {
-                    Condition::Holds(p) => Some(p.clone()),
+                    Condition::Holds(p) | Condition::Unrefuted(p) => Some(p.clone()),
                     Condition::Paid { .. } => None,
                 };
                 if let Some(p) = &prop {

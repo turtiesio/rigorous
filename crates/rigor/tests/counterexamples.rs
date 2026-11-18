@@ -28,7 +28,7 @@ fn msg(n: &'static str) -> Event {
 
 /// Forwards: on a signal about `listens` (or on a tick if `listens` is None), emits signals
 /// about each of `emits`, and remembers what it saw.
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 struct Fwd {
     name: Name,
     listens: Option<Prop>,
@@ -60,7 +60,7 @@ impl Leaf<Event> for Fwd {
 }
 
 /// Records every signal it is sent.
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 struct Rec {
     seen: Vec<Prop>,
 }
@@ -126,6 +126,12 @@ impl Unit<Event> for Rtc {
     }
     fn hash_state(&self, h: &mut dyn Hasher) {
         self.0.hash_state(h);
+    }
+    fn save(&self) -> Result<Vec<u8>, rigor::kernel::EncodingError> {
+        self.0.save()
+    }
+    fn load(&mut self, bytes: &[u8]) -> Result<(), rigor::kernel::EncodingError> {
+        self.0.load(bytes)
     }
     fn find(&self, path: &[Name]) -> Option<&dyn Any> {
         self.0.find(path)
@@ -441,7 +447,7 @@ fn exact_impact_lies_inside_the_static_cone() {
     let (w, _) = run(Cast::default(), false, |_| {}).unwrap();
     let stimuli = w.rt.stimuli();
     let i = stimuli.iter().position(|(a, _)| *a == Path::of(&MONITOR.0)).unwrap();
-    let pre = World { rt: Runtime::replay(root(Cast::default()).unwrap(), &stimuli[..i]).unwrap() };
+    let pre = World { rt: Runtime::replay(root(Cast::default()).unwrap(), &stimuli[..i]).unwrap(), scope: Vec::new() };
     let head = pre.rt.log().head();
     let deployed = Prop::Done(rigor::model::Task::whole(rigor::scenario::TASK1).step(rigor::actors::DEPLOY));
     let bound = cone(&pre, &Change::Prop(deployed.clone())).unwrap();

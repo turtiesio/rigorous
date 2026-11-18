@@ -25,7 +25,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const EPI: Name = Name::lit("epi");
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 struct Item {
     ev: Evidence,
     retracted: bool,
@@ -41,7 +41,7 @@ impl Item {
 }
 
 /// The current standing of a proposition.
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Standing {
     pub assessment: Assessment,
     /// When the earliest evidence now supporting it was given.
@@ -55,7 +55,7 @@ impl Default for Standing {
     }
 }
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Epistemic {
     now: Time,
     version: Version,

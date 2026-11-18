@@ -21,7 +21,7 @@ fn act(act: Act) -> Event {
 
 /// Accepts tasks, subcontracts a service, pays from a delegated budget, and reports.
 /// With `honest == false` it reports success whatever the service said.
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Agent {
     me: ActorId,
     service: ActorId,
@@ -146,7 +146,7 @@ pub const API: Name = Name::lit("api");
 pub const WORKER: Name = Name::lit("worker");
 
 /// Front of the service: accepts jobs, issues receipts, reports outcomes, pays refunds.
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ServiceApi {
     entity: ActorId,
     truthful: bool,
@@ -201,7 +201,7 @@ impl Leaf<Event> for ServiceApi {
 }
 
 /// Back of the service: where the work really happens, or does not.
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Worker {
     works: bool,
 }
@@ -236,7 +236,7 @@ pub fn service(name: &ActorId, works: bool, truthful: bool) -> Result<Entity<Eve
 
 /// The same boundary behaviour as [`service`] with a failing worker, as a single stateless leaf.
 /// Used to show that a composite can be substituted by an atomic unit.
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 pub struct Monolith {
     pub entity: ActorId,
 }

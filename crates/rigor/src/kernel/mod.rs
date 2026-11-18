@@ -8,6 +8,6 @@ mod runtime;
 mod unit;
 
 pub use base::{digest_bytes, digest_of, state_digest, Digest, EncodingError, Name, NameError, Path, StateHasher};
-pub use log::{Entry, Log, LogError};
-pub use runtime::{Runtime, Stimulus};
+pub use log::{read_raw, Entry, Log, LogError, RawEntry, RawLog, SCHEMA};
+pub use runtime::{Runtime, Snapshot, Stimulus};
 pub use unit::{Cell, Emit, Entity, Envelope, Fault, FaultOf, Leaf, LeafError, Par, Payload, Unit, Who};

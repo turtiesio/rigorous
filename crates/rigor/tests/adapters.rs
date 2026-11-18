@@ -91,7 +91,11 @@ fn log_persistence_and_tamper_detection() {
     assert!(matches!(restore(root(Cast::default()).unwrap(), &path), Err(AdapterError::Log(LogError::BrokenChain { .. }))));
 
     // Something that is not an event at all is refused when parsed, before any checking.
-    std::fs::write(&path, "{\"seq\":0,\"id\":1,\"actor\":[\"x\"],\"cause\":null,\"src\":[\"x\"],\"event\":{\"Frobnicate\":1}}\n").unwrap();
-    assert!(matches!(restore(root(Cast::default()).unwrap(), &path), Err(AdapterError::Log(LogError::Parse { line: 1, .. }))));
+    let bogus = "{\"rigor_log_schema\":2}\n{\"seq\":0,\"id\":1,\"actor\":[\"x\"],\"cause\":null,\"src\":[\"x\"],\"event\":{\"Frobnicate\":1}}\n";
+    std::fs::write(&path, bogus).unwrap();
+    assert!(matches!(restore(root(Cast::default()).unwrap(), &path), Err(AdapterError::Log(LogError::Parse { line: 2, .. }))));
+    // A file from a newer or older format is not guessed at: it must be migrated.
+    std::fs::write(&path, "{\"rigor_log_schema\":99}\n").unwrap();
+    assert!(matches!(restore(root(Cast::default()).unwrap(), &path), Err(AdapterError::Log(LogError::Schema { found: 99 }))));
     std::fs::remove_dir_all(dir).unwrap();
 }

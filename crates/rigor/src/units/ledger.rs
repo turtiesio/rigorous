@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 pub const LEDGER: Name = Name::lit("ledger");
 
-#[derive(Clone, Debug, Hash, Default)]
+#[derive(Clone, Debug, Hash, Default, serde::Serialize, serde::Deserialize)]
 pub struct Ledger {
     founded: bool,
     accounts: BTreeSet<ActorId>,
@@ -38,7 +38,7 @@ impl Leaf<Event> for Ledger {
         LEDGER
     }
     fn inputs(&self) -> BTreeSet<Kind> {
-        [Kind::Genesis, Kind::Ok].into_iter().collect()
+        [Kind::Genesis, Kind::Ok, Kind::Member].into_iter().collect()
     }
     fn outputs(&self) -> BTreeSet<Kind> {
         [Kind::Transferred, Kind::TransferFailed].into_iter().collect()
@@ -55,6 +55,10 @@ impl Leaf<Event> for Ledger {
                     let m = self.minted.entry(r.clone()).or_default();
                     m.0 = m.0.saturating_add(n.0);
                 }
+                Ok(Vec::new())
+            }
+            Event::Member(m) => {
+                let _ = self.accounts.insert(m.id.clone());
                 Ok(Vec::new())
             }
             Event::Ok { by, via, act: Act::Transfer(t) } => {

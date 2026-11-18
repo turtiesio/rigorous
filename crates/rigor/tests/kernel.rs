@@ -113,7 +113,8 @@ fn a_composite_can_be_substituted_by_an_atomic_unit() {
     // Replace the two-part service by a stateless monolith with the same boundary behaviour:
     // every other unit ends in exactly the same state, though the traces differ.
     let w = story();
-    let mono = rigor::world::World { rt: Runtime::replay(root(Cast { monolith: true, ..Cast::default() }).unwrap(), &w.rt.stimuli()).unwrap() };
+    let mono =
+        rigor::world::World { rt: Runtime::replay(root(Cast { monolith: true, ..Cast::default() }).unwrap(), &w.rt.stimuli()).unwrap(), scope: Vec::new() };
     assert_eq!(state_digest(w.inst().unwrap()), state_digest(mono.inst().unwrap()));
     assert_eq!(state_digest(w.ledger().unwrap()), state_digest(mono.ledger().unwrap()));
     assert_eq!(state_digest(w.epi().unwrap()), state_digest(mono.epi().unwrap()));
@@ -129,7 +130,7 @@ fn a_composite_can_be_substituted_by_an_atomic_unit() {
     }
 }
 
-#[derive(Clone, Debug, Hash)]
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
 struct Probe {
     name: Name,
     listens: Kind,

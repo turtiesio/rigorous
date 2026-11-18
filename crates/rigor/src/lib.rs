@@ -55,12 +55,15 @@
 
 pub mod actors;
 pub mod adapters;
+pub mod chain;
+pub mod gitlog;
 pub mod impact;
 pub mod kernel;
 pub mod logic;
 pub mod model;
 pub mod org;
 pub mod scenario;
+pub mod steward;
 pub mod synth;
 pub mod units;
 pub mod world;

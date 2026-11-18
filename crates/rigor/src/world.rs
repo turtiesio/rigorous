@@ -34,18 +34,27 @@ pub const CONSTITUTION: Name = Name::lit("constitution");
 #[derive(Debug)]
 pub struct World {
     pub rt: Runtime<Event>,
+    /// The boundaries this facade currently addresses, outermost first. Empty for the root.
+    /// With a scope set, acts are performed by members of that nested organisation and reads
+    /// are of its units: the same facade works at every level of nesting.
+    pub scope: Vec<Name>,
 }
 
 impl World {
     #[must_use]
     pub fn new(root: Box<dyn Unit<Event>>) -> Self {
-        Self { rt: Runtime::new(root) }
+        Self { rt: Runtime::new(root), scope: Vec::new() }
     }
 
     /// # Errors
     /// On a kernel fault.
     pub fn inject(&mut self, actor: &Name, event: Event) -> Result<Vec<Entry<Event>>, Error> {
-        Ok(self.rt.inject(actor, event)?)
+        let (mut path, mut event) = (crate::kernel::Path::of(actor), event);
+        for entity in self.scope.iter().rev() {
+            path = path.inside(entity);
+            event = Event::Scoped { entity: entity.clone(), inner: Box::new(event) };
+        }
+        Ok(self.rt.inject_as(path, event)?)
     }
 
     /// An actor attempts an act under its membership capability.
@@ -72,11 +81,13 @@ impl World {
 
     #[must_use]
     pub fn fork(&self) -> Self {
-        Self { rt: self.rt.fork() }
+        Self { rt: self.rt.fork(), scope: self.scope.clone() }
     }
 
     fn leaf<T: 'static>(&self, name: Name) -> Result<&T, Error> {
-        self.rt.leaf::<T>(std::slice::from_ref(&name)).ok_or(Error::Missing(name))
+        let mut path = self.scope.clone();
+        path.push(name.clone());
+        self.rt.leaf::<T>(&path).ok_or(Error::Missing(name))
     }
 
     /// # Errors

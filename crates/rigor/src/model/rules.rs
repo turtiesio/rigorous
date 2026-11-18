@@ -204,6 +204,9 @@ pub struct VerdictTemplate {
 pub struct NormRules {
     pub on_violation: Vec<ViolationTemplate>,
     pub on_verdict: Vec<VerdictTemplate>,
+    /// How long a maintenance undertaking about a change is expected to run. Adapters read it;
+    /// the reflector may propose revising it from the record of how late refutations arrive.
+    pub maintenance_period: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -235,6 +238,7 @@ pub enum RulePath {
     Trust,
     SelfSupport,
     Templates,
+    Period,
     Responsibility,
     Retroactive,
     Quorum,
@@ -249,6 +253,7 @@ pub enum Amendment {
     SetSelfSupport(bool),
     AddViolationTemplate(ViolationTemplate),
     AddVerdictTemplate(VerdictTemplate),
+    SetMaintenancePeriod(u64),
     AddResponsibilityRules(Vec<RRule>),
     SetRetroactive(bool),
     SetQuorum(u32),
@@ -264,6 +269,7 @@ impl Amendment {
             Self::SetTrust(..) => RulePath::Trust,
             Self::SetSelfSupport(_) => RulePath::SelfSupport,
             Self::AddViolationTemplate(_) | Self::AddVerdictTemplate(_) => RulePath::Templates,
+            Self::SetMaintenancePeriod(_) => RulePath::Period,
             Self::AddResponsibilityRules(_) => RulePath::Responsibility,
             Self::SetRetroactive(_) => RulePath::Retroactive,
             Self::SetQuorum(_) => RulePath::Quorum,
@@ -277,6 +283,7 @@ impl Amendment {
 pub enum RulesError {
     Responsibility(RRuleError),
     QuorumZero,
+    PeriodZero,
     /// Obligations could regress forever through this tag.
     TemplateCycle(Tag),
 }
@@ -300,6 +307,7 @@ impl Rules {
                 Amendment::SetSelfSupport(b) => r.evidence.self_support = *b,
                 Amendment::AddViolationTemplate(t) => r.norms.on_violation.push(t.clone()),
                 Amendment::AddVerdictTemplate(t) => r.norms.on_verdict.push(t.clone()),
+                Amendment::SetMaintenancePeriod(p) => r.norms.maintenance_period = *p,
                 Amendment::AddResponsibilityRules(rs) => r.responsibility.rules.extend(rs.iter().cloned()),
                 Amendment::SetRetroactive(b) => r.responsibility.retroactive = *b,
                 Amendment::SetQuorum(q) => r.governance.quorum = *q,
@@ -322,6 +330,9 @@ impl Rules {
         let _ = datalog::check(&self.responsibility.rules).map_err(RulesError::Responsibility)?;
         if self.governance.quorum < 1 {
             return Err(RulesError::QuorumZero);
+        }
+        if self.norms.maintenance_period == 0 {
+            return Err(RulesError::PeriodZero);
         }
         let mut edges: BTreeMap<Tag, BTreeSet<Tag>> = BTreeMap::new();
         for t in &self.norms.on_violation {

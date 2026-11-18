@@ -47,6 +47,8 @@ named!(/// A stated requirement.
     Requirement);
 named!(/// The identifier of a responsibility rule.
     RuleId);
+named!(/// A change to some body of work, named by its content hash (for example a commit).
+    ChangeId);
 named!(/// A capability created by the constitution.
     CharterName);
 

@@ -11,7 +11,8 @@ Every claim this repository makes, with how it is supported. Six statuses, kept 
 - **Assumed** — taken on trust from outside the system.
 - **Unresolved** — not established here.
 
-Run `cargo test` (46 tests, 8 doctests), `cargo clippy --all-targets` and `lean proofs/Rigor.lean`.
+Run `cargo test` (59 tests, 8 doctests), `cargo clippy --all-targets` and `lean proofs/Rigor.lean` — or
+`cargo run --bin steward`, which runs all of them and records the evidence.
 
 ## 1. Proved (about the model)
 
@@ -77,10 +78,31 @@ rejected on the way in.
 | P6 | Incremental (component-local) assessment equals from-scratch assessment after every event | 40 seeds × 60 steps | `incremental_assessment_equals_from_scratch` |
 | P7 | The grounded labelling algorithm equals the textbook least fixed point | 300 random graphs ≤ 8 nodes | `grounded_matches_the_textbook_definition_on_random_graphs` |
 | P8 | Work caused by one refutation does not depend on world size | N = 20 vs 200 exactly; timed to N = 5000 | `revision_work_is_independent_of_world_size`, measurements §3 |
-| P9 | Judgments changed by a stimulus lie inside the static cone of the change | **one** point of one scenario | `exact_impact_lies_inside_the_static_cone` |
+| P9 | Judgments changed by a stimulus lie inside the static cone of the change | one point of one scenario (see P23 for the property test) | `exact_impact_lies_inside_the_static_cone` |
 | P10 | The nine demonstrations of the brief | scenario and four variants | `crates/rigor/tests/scenario.rs` |
 | P11 | Evidence bound to a file digest goes stale when the file changes, using a real subprocess | one loop | `crates/rigor/tests/adapters.rs` |
 | P12 | Ill-sorted responsibility rules are rejected before enactment | three malformed rule sets | `rules_without_a_unique_meaning_are_rejected` |
+| P13 | Members can be admitted at run time only by a charter-holder; an admitted member has the same standing as a founding one | constructed | `members_can_be_admitted_at_run_time_only_by_charter` |
+| P14 | A maintenance commitment is violated exactly while its proposition stands refuted within the period, is discharged at the end otherwise, and is revised when the refutation is undone | constructed; plus exhaustive exploration of one commitment | `a_maintenance_commitment_is_about_not_being_refuted`, `model_check_maintenance_commitment` |
+| P15 | A real git history built with real `git` (reverts, a revert of a revert, a self-revert, an automated committer) is ingested and the conclusions equal an independent oracle | 6 commits | `a_real_git_history_with_reverts_and_reverts_of_reverts` |
+| P16 | The steward's record survives restarts, records unevidenced days as violations with findings, closes roadmap items only on the project's acceptance, and sets aside an edited log | constructed repository | `the_steward_keeps_an_honest_record_across_runs` |
+| P17 | Judging does no work while nothing is violated, whatever the number of members | 600 members | `judging_costs_nothing_until_…` |
+| P18 | **Real data**: 4,000 consecutive real commits (84 resolvable reverts, 6 reverts of reverts, 270 sponsored admissions) agree with the oracle and keep every invariant | fixture checked into the repository | `four_thousand_real_commits_agree_with_the_oracle_and_keep_every_invariant` |
+| P19 | A world resumed from a snapshot file and continued, compacting as it goes, equals the uninterrupted one in state, chain head and conclusions; a corrupt or ill-fitting snapshot is refused | the same fixture | `a_snapshot_resumes_exactly_and_memory_need_not_grow_with_history` |
+| P20 | Two real histories as nested organisations, interleaved commit by commit, each conclude exactly what they conclude alone | the same fixture, halved | `nested_organisations_on_real_data_behave_exactly_as_they_do_alone` |
+| P21 | A log in an older format is verified from its stored bytes and migrated to the same judgments; an edited one is refused before interpretation | scenario log | `a_log_in_an_older_format_is_verified_from_its_bytes_and_migrated` |
+| P22 | The reflector proposes lowering a method's rank once its record crosses the threshold, cannot approve its own proposal, cannot touch entrenched rules, and existing assessments are revised when a human approves | constructed | `the_reflector_proposes_a_rule_change_from_the_record_and_cannot_enact_it_alone` |
+| P23 | Every existing judgment a stimulus changes lies inside the static cone of the change (closes U3) | 360 random cases, over 100 non-trivial | `exact_impact_always_lies_inside_the_static_cone` |
+
+## 3a. Measured on external data (reproducible with network access; not part of `cargo test`)
+
+| Id | Statement | Extent | How |
+|---|---|---|---|
+| R1 | On three public git histories: the set of changes held refuted equals an independent oracle; incremental assessment equals from-scratch; every act was authorised; no capability amplifies its parent; the log verifies and replays bit-for-bit | 276,548 commits, 3,661,378 events, 12,866 members admitted (7,803 under delegated authority), 1,185 reverts of which 44 revert a revert | `cargo run --release --bin stress`; `06-real-data.md` |
+| R2 | A world resumed from a half-way snapshot and continued equals the uninterrupted one; resume takes under 1 s where replay takes 4–15 s | the same three histories | same |
+| R3 | A governance amendment applied to each real record re-assesses it consistently (incremental still equals from-scratch) and revises violations and verdicts with it | the same three histories | same |
+| R4 | Three histories as separately bounded organisations in one world, interleaved by time, each conclude what they conclude alone | 3,661,378 events under one hash chain | same |
+| R5 | The steward, run on this repository, found a lint failure introduced minutes earlier and recorded it; re-ran only checks whose files had changed; migrated its own log from the previous format with its history; and recorded three roadmap items as closed on the project's acceptance | 2026-11-18 | `cargo run --bin steward`; `.rigor/` |
 
 **No longer reproducible.** An earlier Python prototype of the same semantics was kept alongside the Rust
 code until the two were shown to agree on five scenario variants (commitments, statuses, assessments,
@@ -97,11 +119,12 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 | A-CLOCK | `tick` events are monotone and reflect real time | Deadlines, expiry |
 | A-HASH | SHA-256 is collision resistant; note ids are **truncated** to 64 bits | Log integrity; identity of commitments/evidence at large scale |
 | A-TRUST | The `trusted` table names sources that report honestly for each method | Every assessment |
-| A-ADAPTER | Adapters report what they observed (file digests, exit codes) | Conformance evidence |
+| A-ADAPTER | Adapters report what they observed (file digests, exit codes, commit metadata), and the mapping they apply means what it claims (a revert is a refutation; a distinct committer is an acknowledgement) | Conformance evidence; every conclusion drawn from real data |
 | A-UNIT | Each unit's transition function is deterministic and touches only its own state | Replay, composition laws. State-locality is compiler-enforced (C10); purity is not: a unit could still read a clock or a file |
 | A-RULES | The rule set expresses what the institution means | Verdicts are sound for the rules, not for justice |
 | A-OBS | "Notified" means a message was delivered, not that anyone understood it | The `knew` finding |
-| A-TCB | The kernel, reasoners, vocabulary and institutional units are correct (about 3,400 lines) | Everything not independently proved |
+| A-SNAPSHOT | A snapshot file is the state its log produces (see U18) | Everything after a resume |
+| A-TCB | The kernel, reasoners, vocabulary and institutional units are correct (about 3,900 lines) | Everything not independently proved |
 | A-TOOLS | The Rust compiler, `serde`, `serde_json`, `sha2`, and the Lean kernel are correct | Everything marked compiler-enforced or proved |
 
 ## 5. Unresolved
@@ -110,7 +133,7 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 |---|---|
 | U1 | No proof connects the Lean model to the Rust code |
 | U2 | Termination of a cascade is not guaranteed for arbitrary units (only a fuel bound). Acyclic templates are *intended* to bound chains of secondary duties; that is not proved |
-| U3 | Soundness of the static impact cone is tested at one point only |
+| U3 | Soundness of the static impact cone is property-tested (P23), not proved |
 | U4 | Only the adjudicator waits for quiescence. Any other unit that reads several facts at once can still see a half-propagated state |
 | U5 | Commutativity of `Par` is tested, not proved. There is no static independence analysis and no partial-order reduction; independence is demonstrated per case |
 | U6 | No liveness property of any kind is established |
@@ -119,11 +142,17 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 | U9 | A nested organisation acting *as a member* of an outer institution (inner verdicts becoming outer evidence) is not built; nesting is tested for behavioural isomorphism only |
 | U10 | Uncertainty is ordinal (method ranks). No probabilities, no quantitative confidence |
 | U11 | Confidentiality: boundaries stop units *listening*, but the log is global and readable |
-| U12 | Dynamic restructuring: members and units are fixed at genesis / build time. No admission, expulsion or re-wiring at run time |
+| U12 | Dynamic restructuring: members can be admitted at run time (by charter, delegably), but not expelled or re-assigned; units are still fixed at build time |
 | U13 | Goals and requirements exist only as propositions and commitment consequents; intentions are not modelled |
 | U14 | Propositions are opaque names: no entailment between them except explicit `derived_from`, and no time-indexed facts (redoing a task needs a new proposition) |
 | U15 | Rules of non-retroactivity are per family and coarse; evidence-rule changes are always retroactive |
 | U16 | The typed vocabulary is closed: a new kind of proposition, tag, method or predicate means editing an enum and recompiling. The kernel and reasoners are generic, so a second domain can bring its own event type, but two domains cannot yet be *combined* without a common enum |
+| U18 | A snapshot is trusted, not attested: its digest shows it is uncorrupted, not that it is the state its log produces |
+| U19 | Migration replays old stimuli under today's units, so derived events may differ from the old log's; only the stimuli and the old chain head are carried over. No event has yet changed shape, so the per-event upcast step is untested on a real change |
+| U20 | Backdated records get their period from arrival: a policy, not a model of event time versus record time |
+| U21 | Identity merging is only what the project's own mailmap says |
+| U22 | Resource transfers, spending limits and conservation have met no real data: they are exercised only on constructed scenarios and randomised tests. Nested organisations have run side by side on real data but never interacting |
+| U23 | The reflector's thresholds are fixed parameters, and it knows one kind of improvement (lowering a method's rank). On the real histories it proposed nothing |
 | U17 | In-memory state digests (used only by the model checker) rely on `std::hash`, which is not stable across compiler versions; they are never persisted or compared across builds |
 
 ## 6. Negative results and counterexamples (executable)
@@ -143,6 +172,9 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 | N11 | **Judging mid-cascade produces spurious verdicts.** Found during development: a liability was created and voided within one cascade. Fixed by `settle`; see U4 for what remains | — | `main_scenario` asserts one verdict per cascade |
 | N12 | **Global state grows as 3ⁿ** for n independent commitments even in the smallest instance | measurements §5 | `measure` |
 | N13 | **Adjudication cost is superlinear in family size** (naive Datalog joins): 0.2 ms at depth 5, about 4 ms at depth 100 | measurements §4 | `measure` |
+| N15 | **Judging every family on every cascade does not scale.** Found on real data: throughput fell 20-fold over 61,537 commits because each judgment enumerated every member. Fixed; pinned by P17 | first stress run | `06-real-data.md` |
+| N16 | **A version-control history does not contain the evidence of review.** 5% of Kubernetes commits show an independent acknowledgement in git metadata | git metadata only | `06-real-data.md` |
+| N17 | **Real records are not well-formed.** 11% of declared reverts cannot be resolved to one earlier commit; 578 commits have clocks behind ones already seen | three histories | `06-real-data.md` |
 | N14 | **Nobody is outside the model.** When the service works, the scripted Alice never pays what she promised, and the same rules find her accountable and liable. Not a bug | scenario, working service | `working_service_everything_is_satisfied` |
 
 Known theorems that bound what is achievable, cited and **not** re-proved here: Rice's theorem (no non-trivial

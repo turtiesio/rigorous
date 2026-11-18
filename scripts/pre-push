@@ -1,0 +1,4 @@
+#!/bin/sh
+# Opt-in git hook: the project checks itself before anything leaves this machine.
+# Enable with:  git config core.hooksPath scripts
+exec cargo run --quiet --bin steward

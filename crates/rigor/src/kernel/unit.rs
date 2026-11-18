@@ -120,7 +120,7 @@ impl<F> From<EncodingError> for LeafError<F> {
 }
 
 /// A primitive unit. `on` is its transition function; it owns its state.
-pub trait Leaf<E: Payload>: Clone + std::hash::Hash + Debug + 'static {
+pub trait Leaf<E: Payload>: Clone + std::hash::Hash + Debug + serde::Serialize + serde::de::DeserializeOwned + 'static {
     fn name(&self) -> Name;
     fn inputs(&self) -> BTreeSet<E::Kind>;
     fn outputs(&self) -> BTreeSet<E::Kind>;
@@ -145,6 +145,16 @@ pub trait Unit<E: Payload>: Debug {
     fn step(&mut self, env: &Envelope<'_, E>) -> Result<Vec<Emit<E>>, FaultOf<E>>;
     fn fork(&self) -> Box<dyn Unit<E>>;
     fn hash_state(&self, h: &mut dyn Hasher);
+    /// The unit's whole state, for a snapshot.
+    ///
+    /// # Errors
+    /// If the state cannot be encoded.
+    fn save(&self) -> Result<Vec<u8>, EncodingError>;
+    /// Replace the unit's state with one produced by [`Unit::save`] on a unit built the same way.
+    ///
+    /// # Errors
+    /// If the bytes are not such a state.
+    fn load(&mut self, bytes: &[u8]) -> Result<(), EncodingError>;
     /// Typed read access to a leaf by local path (for views and tests; never for other units).
     fn find(&self, path: &[Name]) -> Option<&dyn Any>;
 }
@@ -193,6 +203,13 @@ impl<E: Payload, L: Leaf<E>> Unit<E> for Cell<L> {
     fn hash_state(&self, mut h: &mut dyn Hasher) {
         std::hash::Hash::hash(&self.0, &mut h);
     }
+    fn save(&self) -> Result<Vec<u8>, EncodingError> {
+        bincode::serialize(&self.0).map_err(|e| EncodingError(e.to_string()))
+    }
+    fn load(&mut self, bytes: &[u8]) -> Result<(), EncodingError> {
+        self.0 = bincode::deserialize(bytes).map_err(|e| EncodingError(e.to_string()))?;
+        Ok(())
+    }
     fn find(&self, path: &[Name]) -> Option<&dyn Any> {
         match path {
             [n] if *n == self.0.name() => Some(&self.0),
@@ -204,8 +221,12 @@ impl<E: Payload, L: Leaf<E>> Unit<E> for Cell<L> {
 /// Parallel composition.
 #[derive(Debug)]
 pub struct Par<E: Payload> {
-    parts: Vec<Box<dyn Unit<E>>>,
+    /// Each part with its input interface, computed once: interfaces are fixed at construction.
+    parts: Vec<Slot<E>>,
 }
+
+/// A part together with its input interface.
+type Slot<E> = (BTreeSet<<E as Payload>::Kind>, Box<dyn Unit<E>>);
 
 impl<E: Payload> Par<E> {
     /// Compose. `open` are the kinds any part may emit (authenticated by the kernel's actor
@@ -240,45 +261,58 @@ impl<E: Payload> Par<E> {
                 owner.push((k, me.clone()));
             }
         }
-        Ok(Self { parts })
+        Ok(Self { parts: parts.into_iter().map(|u| (u.inputs(), u)).collect() })
     }
 }
 
 impl<E: Payload> Unit<E> for Par<E> {
     fn names(&self) -> Vec<Name> {
-        self.parts.iter().flat_map(|u| u.names()).collect()
+        self.parts.iter().flat_map(|(_, u)| u.names()).collect()
     }
     fn inputs(&self) -> BTreeSet<E::Kind> {
-        self.parts.iter().flat_map(|u| u.inputs()).collect()
+        self.parts.iter().flat_map(|(i, _)| i.iter().copied()).collect()
     }
     fn outputs(&self) -> BTreeSet<E::Kind> {
-        self.parts.iter().flat_map(|u| u.outputs()).collect()
+        self.parts.iter().flat_map(|(_, u)| u.outputs()).collect()
     }
     fn spies(&self) -> Vec<Name> {
-        self.parts.iter().flat_map(|u| u.spies()).collect()
+        self.parts.iter().flat_map(|(_, u)| u.spies()).collect()
     }
     fn step(&mut self, env: &Envelope<'_, E>) -> Result<Vec<Emit<E>>, FaultOf<E>> {
         let kind = env.event.kind();
         let mut out = Vec::new();
-        for u in &mut self.parts {
-            if u.inputs().contains(&kind) {
+        for (inputs, u) in &mut self.parts {
+            if inputs.contains(&kind) {
                 out.extend(u.step(env)?);
             }
         }
         Ok(out)
     }
     fn fork(&self) -> Box<dyn Unit<E>> {
-        Box::new(Self { parts: self.parts.iter().map(|u| u.fork()).collect() })
+        Box::new(Self { parts: self.parts.iter().map(|(i, u)| (i.clone(), u.fork())).collect() })
     }
     fn hash_state(&self, h: &mut dyn Hasher) {
-        // Order-insensitive to bracketing would need a normal form; state digests are compared
-        // only between runtimes built the same way.
-        for u in &self.parts {
+        // State digests are compared only between runtimes built the same way.
+        for (_, u) in &self.parts {
             u.hash_state(h);
         }
     }
+    fn save(&self) -> Result<Vec<u8>, EncodingError> {
+        let parts: Result<Vec<Vec<u8>>, EncodingError> = self.parts.iter().map(|(_, u)| u.save()).collect();
+        bincode::serialize(&parts?).map_err(|e| EncodingError(e.to_string()))
+    }
+    fn load(&mut self, bytes: &[u8]) -> Result<(), EncodingError> {
+        let parts: Vec<Vec<u8>> = bincode::deserialize(bytes).map_err(|e| EncodingError(e.to_string()))?;
+        if parts.len() != self.parts.len() {
+            return Err(EncodingError("snapshot is of a differently composed unit".to_owned()));
+        }
+        for ((_, u), b) in self.parts.iter_mut().zip(&parts) {
+            u.load(b)?;
+        }
+        Ok(())
+    }
     fn find(&self, path: &[Name]) -> Option<&dyn Any> {
-        self.parts.iter().find_map(|u| u.find(path))
+        self.parts.iter().find_map(|(_, u)| u.find(path))
     }
 }
 
@@ -287,6 +321,7 @@ impl<E: Payload> Unit<E> for Par<E> {
 pub struct Entity<E: Payload> {
     name: Name,
     inner: Box<dyn Unit<E>>,
+    inner_inputs: BTreeSet<E::Kind>,
     imports: BTreeSet<E::Kind>,
     exports: BTreeSet<E::Kind>,
 }
@@ -294,7 +329,7 @@ pub struct Entity<E: Payload> {
 impl<E: Payload> Entity<E> {
     #[must_use]
     pub fn new(name: Name, inner: Box<dyn Unit<E>>, imports: BTreeSet<E::Kind>, exports: BTreeSet<E::Kind>) -> Self {
-        Self { name, inner, imports, exports }
+        Self { name, inner_inputs: inner.inputs(), inner, imports, exports }
     }
 }
 
@@ -305,7 +340,7 @@ impl<E: Payload> Unit<E> for Entity<E> {
     fn inputs(&self) -> BTreeSet<E::Kind> {
         let mut s = self.imports.clone();
         let _ = s.insert(E::scoped_kind());
-        if self.inner.inputs().contains(&E::settle_kind()) {
+        if self.inner_inputs.contains(&E::settle_kind()) {
             let _ = s.insert(E::settle_kind());
         }
         s
@@ -338,7 +373,7 @@ impl<E: Payload> Unit<E> for Entity<E> {
             None if self.imports.contains(&env.event.kind()) => (env.event, outer(&env.who)),
             None => return Ok(Vec::new()),
         };
-        if !self.inner.inputs().contains(&event.kind()) {
+        if !self.inner_inputs.contains(&event.kind()) {
             return Ok(Vec::new());
         }
         let inner_env = Envelope { who, entry: env.entry, event };
@@ -354,10 +389,22 @@ impl<E: Payload> Unit<E> for Entity<E> {
         Ok(out)
     }
     fn fork(&self) -> Box<dyn Unit<E>> {
-        Box::new(Self { name: self.name.clone(), inner: self.inner.fork(), imports: self.imports.clone(), exports: self.exports.clone() })
+        Box::new(Self {
+            name: self.name.clone(),
+            inner: self.inner.fork(),
+            inner_inputs: self.inner_inputs.clone(),
+            imports: self.imports.clone(),
+            exports: self.exports.clone(),
+        })
     }
     fn hash_state(&self, h: &mut dyn Hasher) {
         self.inner.hash_state(h);
+    }
+    fn save(&self) -> Result<Vec<u8>, EncodingError> {
+        self.inner.save()
+    }
+    fn load(&mut self, bytes: &[u8]) -> Result<(), EncodingError> {
+        self.inner.load(bytes)
     }
     fn find(&self, path: &[Name]) -> Option<&dyn Any> {
         match path.split_first() {

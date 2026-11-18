@@ -271,6 +271,10 @@ where
 {
     let strata = check(rules)?;
     let mut db: BTreeSet<Fact<P, C>> = facts.into_iter().collect();
+    let mut by: BTreeMap<P, Vec<Fact<P, C>>> = BTreeMap::new();
+    for f in &db {
+        by.entry(f.pred).or_default().push(f.clone());
+    }
     let mut why: BTreeMap<Fact<P, C>, Why<I, P, C>> = BTreeMap::new();
     let levels: BTreeSet<usize> = strata.values().copied().collect();
     for level in levels {
@@ -283,7 +287,7 @@ where
                     if let Literal::Pos(atom) = l {
                         let mut next = Vec::new();
                         for (env, used) in &envs {
-                            for f in db.iter().filter(|f| f.pred == atom.pred) {
+                            for f in by.get(&atom.pred).into_iter().flatten() {
                                 if let Some(e2) = unify(atom, f, env) {
                                     let mut u = used.clone();
                                     u.push(f.clone());
@@ -318,6 +322,7 @@ where
             }
             for (head, w) in new {
                 if db.insert(head.clone()) {
+                    by.entry(head.pred).or_default().push(head.clone());
                     let _ = why.insert(head, w);
                 }
             }

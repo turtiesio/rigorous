@@ -1,8 +1,9 @@
 //! The closed-world executor: one FIFO queue over one root unit, one log.
 
-use super::base::{state_digest, Digest, Name, Path, StateHasher};
+use super::base::{digest_bytes, state_digest, Digest, EncodingError, Name, Path, StateHasher};
 use super::log::{Entry, Log};
 use super::unit::{Envelope, Fault, FaultOf, Payload, Unit, Who};
+use serde::{Deserialize, Serialize};
 use std::any::Any;
 use std::collections::VecDeque;
 use std::hash::Hasher;
@@ -10,8 +11,25 @@ use std::hash::Hasher;
 #[derive(Debug)]
 pub struct Runtime<E: Payload> {
     root: Box<dyn Unit<E>>,
+    inputs: std::collections::BTreeSet<E::Kind>,
     log: Log<E>,
     fuel: u64,
+}
+
+/// The whole state of a runtime at one point of its log. Restoring from it and then replaying
+/// the later stimuli gives the same runtime as replaying everything (tested), at a cost that
+/// does not depend on how long the history before it was.
+///
+/// A snapshot is TRUSTED input: its digest shows it was not corrupted, not that it is the state
+/// the log up to `head` really produces. Only a full replay shows that.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snapshot {
+    /// Number of events recorded when it was taken.
+    pub seq: u64,
+    /// Head of the log's hash chain at that point.
+    pub head: Digest,
+    pub digest: Digest,
+    pub state: Vec<u8>,
 }
 
 /// An external stimulus: who did what.
@@ -20,7 +38,7 @@ pub type Stimulus<E> = (Name, E);
 impl<E: Payload> Runtime<E> {
     #[must_use]
     pub fn new(root: Box<dyn Unit<E>>) -> Self {
-        Self { root, log: Log::default(), fuel: 1_000_000 }
+        Self { inputs: root.inputs(), root, log: Log::default(), fuel: 1_000_000 }
     }
 
     #[must_use]
@@ -42,8 +60,8 @@ impl<E: Payload> Runtime<E> {
     /// # Errors
     /// See [`Fault`].
     pub fn inject_as(&mut self, actor: Path, event: E) -> Result<Vec<Entry<E>>, FaultOf<E>> {
-        let start = self.log.len();
-        let settles = self.root.inputs().contains(&E::settle_kind());
+        let start = self.log.entries().len();
+        let settles = self.inputs.contains(&E::settle_kind());
         let kernel = Path::of(&Name::lit("kernel"));
         let mut q: VecDeque<(Path, Option<Digest>, Path, E)> = VecDeque::new();
         q.push_back((actor.clone(), None, actor, event));
@@ -56,7 +74,7 @@ impl<E: Payload> Runtime<E> {
             let kind = event.kind();
             dirty = dirty || kind != E::settle_kind();
             let entry = self.log.append(actor, cause, src, event)?.clone();
-            if self.root.inputs().contains(&kind) {
+            if self.inputs.contains(&kind) {
                 let env = Envelope { who: Who::Here(entry.actor.clone()), entry: &entry, event: &entry.event };
                 let mut outs = self.root.step(&env)?;
                 // Stable: each leaf's own order is kept; order across leaves is canonical.
@@ -73,9 +91,37 @@ impl<E: Payload> Runtime<E> {
         Ok(self.log.entries().get(start..).map(<[Entry<E>]>::to_vec).unwrap_or_default())
     }
 
+    /// Capture the whole state at the current end of the log.
+    ///
+    /// # Errors
+    /// If a unit's state cannot be encoded.
+    pub fn snapshot(&self) -> Result<Snapshot, EncodingError> {
+        let state = self.root.save()?;
+        Ok(Snapshot { seq: self.log.next_seq(), head: self.log.head(), digest: digest_bytes(&state), state })
+    }
+
+    /// A runtime that continues from a snapshot, with an empty retained log.
+    /// `root` must be built exactly as the root the snapshot was taken from.
+    ///
+    /// # Errors
+    /// If the snapshot is corrupt or does not fit the root.
+    pub fn resume(mut root: Box<dyn Unit<E>>, snapshot: &Snapshot) -> Result<Self, EncodingError> {
+        if digest_bytes(&snapshot.state) != snapshot.digest {
+            return Err(EncodingError("snapshot digest does not match its state".to_owned()));
+        }
+        root.load(&snapshot.state)?;
+        Ok(Self { inputs: root.inputs(), root, log: Log::starting_at(snapshot.seq, snapshot.head), fuel: 1_000_000 })
+    }
+
+    /// Forget the retained entries (they must have been persisted, or summarised by a snapshot).
+    /// The chain continues; memory no longer grows with history.
+    pub fn compact(&mut self) {
+        self.log = Log::starting_at(self.log.next_seq(), self.log.head());
+    }
+
     #[must_use]
     pub fn fork(&self) -> Self {
-        Self { root: self.root.fork(), log: self.log.clone(), fuel: self.fuel }
+        Self { root: self.root.fork(), inputs: self.inputs.clone(), log: self.log.clone(), fuel: self.fuel }
     }
 
     /// In-memory digest of the whole state (not of the log).

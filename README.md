@@ -16,9 +16,11 @@ are denied by lint in library code.
 
 ```sh
 cargo run --bin scenario                      # the end-to-end demonstrator, narrated
-cargo test                                    # 46 tests + 8 doctests (4 show mistakes that do not compile)
+cargo run --bin steward                       # the project checks itself and records the evidence
+cargo test                                    # 59 tests + 8 doctests; includes 4,000 real commits
 cargo clippy --all-targets                    # the strict lint set in Cargo.toml; must be clean
 cargo run --release --bin measure             # regenerates docs/04-measurements.md
+cargo run --release --bin stress -- <bare git repo>...   # real histories through the whole system
 lean proofs/Rigor.lean                        # 7 machine-checked theorems about the model
 ```
 
@@ -60,6 +62,36 @@ pays it 30. The service fails and says so; the agent reports success anyway, cit
 5. Over-delegation, overspending and use of a revoked capability (including a sub-delegated one) are **denied**.
 6. An entrenched rule cannot be amended; a valid amendment needs a quorum and produces rule version 2.
 
+## It governs itself
+
+`cargo run --bin steward` treats this repository as a member of its own model. "The tests pass", "the lints
+are clean", "the formatting is canonical" and "the proofs check" are propositions; the only evidence for them
+is really running the checks, bound to digests of the real files.
+
+- Unchanged files mean earlier evidence still counts and nothing is re-run; a changed file makes the evidence
+  about it stale.
+- A day on which a claim did not hold stays in the log as a violated commitment, and creates a duty to put it
+  right within a week, discharged only by evidence that the requirement holds again.
+- The roadmap's next items are commitments in the same world, each with a review-by day, closed only by the
+  project's acceptance.
+- Its log survives restarts and format changes: it has already migrated its own log once.
+
+A **reflector** unit goes one step further for rules: it records how each method of evidence fares and, past
+a threshold, proposes lowering that method's rank through ordinary governance. It cannot enact anything.
+
+None of this writes code. It notices, records, proposes and holds to account. `scripts/pre-push` is an opt-in
+git hook that runs the steward (`git config core.hooksPath scripts`).
+
+## It has met real data
+
+Three public git histories — git, Node.js, Kubernetes; 276,548 commits, 3.7 million events — were run through
+the whole system, with reverts as real refutations, newcomers admitted by sponsors under delegated authority,
+a rule amendment applied to each record, and the three projects nested as separate organisations in one
+world. Its conclusions matched an independent oracle throughout. The work exposed a 20-fold scaling defect,
+unbounded restart cost, a log format that could not evolve, and several missing concepts; those were fixed.
+What it still does not handle is listed in `docs/06-real-data.md`. A 4,000-commit real slice is part of
+`cargo test`.
+
 ## Where to read
 
 | File | Content |
@@ -68,7 +100,8 @@ pays it 30. The service fails and says so; the agent reports success anyway, cit
 | `docs/02-semantics.md` | The formal model, the typing discipline, and answers to the ten research questions |
 | `docs/03-status-ledger.md` | **Every claim, marked proved / compiler-enforced / model-checked / tested / assumed / unresolved**; negative results; trusted assumptions |
 | `docs/04-measurements.md` | Trusted-base size, encoding overhead, scaling, state-space growth (release build) |
-| `docs/05-roadmap.md` | What to do next, ordered by which assumption it removes |
+| `docs/05-roadmap.md` | What it lacks: address next / deferred / parked, with reasons and triggers |
+| `docs/06-real-data.md` | Stress against three real git histories (276,548 commits): results, what broke, what remains |
 
 ## Layout
 
@@ -78,10 +111,11 @@ crates/rigor/src/
                explore.rs                          bounded model checker
   logic/       argue.rs datalog.rs                 the two reasoners (generic)
   model/       ids.rs event.rs rules.rs            the closed, typed vocabulary
-  units/       institution ledger epistemic norms adjudicator governance
+  units/       institution ledger epistemic norms adjudicator governance reflector
   org.rs actors.rs scenario.rs world.rs impact.rs adapters.rs synth.rs
-  bin/         scenario.rs measure.rs
-crates/rigor/tests/   kernel scenario properties counterexamples adapters
+  gitlog.rs steward.rs                             real-data adapter; self-stewardship
+  bin/         scenario.rs measure.rs stress.rs steward.rs
+crates/rigor/tests/   kernel scenario properties counterexamples adapters realworld
 proofs/Rigor.lean
 ```
 
@@ -92,6 +126,8 @@ proofs/Rigor.lean
 - The system never establishes that a claim is *true*. It computes an assessment from evidence supplied by
   sources it was told to trust.
 - There is one log and one clock. Distribution, partitions and confidentiality are not addressed.
+- Real data has exercised admission, delegation, commitments, evidence, adjudication, governance and nesting,
+  but not resource transfers or spending limits, and a snapshot is trusted rather than attested.
 - Liveness is not established for anything, and is shown not to compose.
 - Strict typing closes the vocabulary: adding a new kind of proposition, tag or predicate means changing an
   enum and recompiling. That is a deliberate trade, recorded as U16 in the ledger.

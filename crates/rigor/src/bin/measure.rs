@@ -96,8 +96,8 @@ fn main() -> Result<(), Failed> {
             ],
         ),
         (
-            "Not trusted for soundness: standard rules, explorer, impact, adapters, actors, scenario, facade",
-            &["org.rs", "kernel/explore.rs", "impact.rs", "adapters.rs", "actors.rs", "scenario.rs", "world.rs", "synth.rs"],
+            "Not trusted for soundness: standard rules, explorer, impact, adapters, actors, scenario, facade, git adapter, steward",
+            &["org.rs", "kernel/explore.rs", "impact.rs", "adapters.rs", "actors.rs", "scenario.rs", "world.rs", "synth.rs", "gitlog.rs", "steward.rs"],
         ),
     ];
     let mut rows = Vec::new();
@@ -231,7 +231,7 @@ fn main() -> Result<(), Failed> {
             let grant = Grant {
                 to: ALICE,
                 actions: std::iter::once(ActionKind::Transfer).collect(),
-                scope: Scope { from: Some(ALICE) },
+                scope: Scope { from: Some(ALICE), purpose: None },
                 limits: std::iter::once((CREDIT, Amount(100_000 - i))).collect(),
                 expires: None,
                 delegable: true,

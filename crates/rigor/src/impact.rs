@@ -110,7 +110,7 @@ pub fn cone(w: &World, change: &Change) -> Result<BTreeSet<Judgment>, Error> {
             let all = closure(w, norms.records().map(|r| r.commitment.id).collect())?;
             return Ok(all.into_iter().flat_map(|c| [Judgment::Commitment(c), Judgment::Verdict(c)]).collect());
         }
-        Change::Rules(RulePath::Templates | RulePath::Quorum | RulePath::Entrenched) => return Ok(BTreeSet::new()),
+        Change::Rules(RulePath::Templates | RulePath::Period | RulePath::Quorum | RulePath::Entrenched) => return Ok(BTreeSet::new()),
         Change::Cap(id) => {
             let mut hit: BTreeSet<CapId> = std::iter::once(id.clone()).collect();
             loop {
