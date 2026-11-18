@@ -1,6 +1,23 @@
 [workspace]
 resolver = "2"
-members = ["crates/kernel", "crates/logic", "crates/institution", "crates/adapters/host", "crates/adapters/git", "crates/adapters/chain", "crates/adapters/registry", "crates/adapters/forge", "crates/demo", "crates/mind", "crates/steward", "crates/rigor"]
+members = ["waist", "explore", "logic", "concepts/value", "assembly", "claims", "edges/host", "edges/git", "edges/chain", "edges/registry", "edges/forge", "edges/mind", "operate/demo", "operate/steward", "app"]
+exclude = ["archive"]
+
+[workspace.dependencies]
+rigor-waist = { path = "waist" }
+rigor-logic = { path = "logic" }
+rigor-explore = { path = "explore" }
+rigor-value = { path = "concepts/value" }
+rigor-claims = { path = "claims" }
+rigor-institution = { path = "assembly" }
+rigor-adapter-host = { path = "edges/host" }
+rigor-adapter-git = { path = "edges/git" }
+rigor-adapter-chain = { path = "edges/chain" }
+rigor-adapter-registry = { path = "edges/registry" }
+rigor-adapter-forge = { path = "edges/forge" }
+rigor-demo = { path = "operate/demo" }
+rigor-steward = { path = "operate/steward" }
+rigor-mind = { path = "edges/mind" }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

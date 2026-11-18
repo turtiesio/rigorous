@@ -1,0 +1,12 @@
+[package]
+name = "rigor-value"
+version = "0.1.0"
+edition = "2021"
+description = "Concept: countable resources that are conserved and never go negative"
+
+[dependencies]
+rigor-waist.workspace = true
+serde = { version = "1", features = ["derive"] }
+
+[lints]
+workspace = true

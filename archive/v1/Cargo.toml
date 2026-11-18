@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members = ["crates/kernel", "crates/logic", "crates/institution", "crates/adapters/host", "crates/adapters/git", "crates/adapters/chain", "crates/adapters/registry", "crates/adapters/forge", "crates/demo", "crates/mind", "crates/steward", "crates/rigor"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+warnings = "deny"
+unused_results = "deny"
+missing_debug_implementations = "deny"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+todo = "deny"
+unimplemented = "deny"
+unreachable = "deny"
+dbg_macro = "deny"
+as_conversions = "deny"
+string_slice = "deny"

@@ -1,0 +1,11 @@
+[package]
+name = "rigor-explore"
+version = "0.1.0"
+edition = "2021"
+description = "Bounded explicit-state exploration: a harness, not part of the trusted waist"
+
+[dependencies]
+rigor-waist.workspace = true
+
+[lints]
+workspace = true

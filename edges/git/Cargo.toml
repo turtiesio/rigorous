@@ -1,0 +1,13 @@
+[package]
+name = "rigor-adapter-git"
+version = "0.1.0"
+edition = "2021"
+description = "Adapter: git histories"
+
+[dependencies]
+rigor-waist.workspace = true
+rigor-institution.workspace = true
+rigor-adapter-host.workspace = true
+
+[lints]
+workspace = true

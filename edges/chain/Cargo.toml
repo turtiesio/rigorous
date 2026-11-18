@@ -1,0 +1,12 @@
+[package]
+name = "rigor-adapter-chain"
+version = "0.1.0"
+edition = "2021"
+description = "Adapter: blocks of transfers"
+
+[dependencies]
+rigor-waist.workspace = true
+rigor-institution.workspace = true
+
+[lints]
+workspace = true

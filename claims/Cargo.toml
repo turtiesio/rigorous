@@ -1,0 +1,11 @@
+[package]
+name = "rigor-claims"
+version = "0.1.0"
+edition = "2021"
+description = "Every claim the project makes as a typed record, and the checks that keep them honest"
+
+[dependencies]
+rigor-waist.workspace = true
+
+[lints]
+workspace = true

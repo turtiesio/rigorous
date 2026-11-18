@@ -1,18 +1,26 @@
 # Status ledger
 
-Every claim this repository makes, with how it is supported. Six statuses, kept strictly apart:
+GENERATED from the records in `claims/src/book/` by `cargo run --bin claims -- --write`. Do not edit:
+a test fails if this file differs from what the records say, or if a record cites a test or a theorem
+that does not exist.
+
+Every claim this repository makes, with how it is supported. The kinds of support are kept strictly apart:
 
 - **Proved** — machine-checked in Lean 4 (`proofs/Rigor.lean`). These are theorems about the *mathematical
   model* in `02-semantics.md`. They say nothing directly about the Rust code.
 - **Compiler-enforced** — the Rust type checker or a denied lint rejects the program. Holds for every
   execution, with no test needed.
 - **Model-checked** — exhaustive exploration of a *finite instance* to a fixed point.
-- **Tested** — seeded randomised or scenario tests in `crates/rigor/tests/`. Evidence, not proof.
+- **Tested** — seeded randomised or scenario tests. Evidence, not proof.
+- **Measured** — run on external data; reproducible, but not part of the test suite.
 - **Assumed** — taken on trust from outside the system.
 - **Unresolved** — not established here.
 
-Run `cargo test` (82 tests, 8 doctests), `cargo clippy --all-targets` and `lean proofs/Rigor.lean` — or
-`cargo run --bin steward`, which runs all of them and records the evidence.
+Section 7 places each property in the six classes: preserved by composition, statically checked, enforced
+at run time, observable only, resting on external trust, not established.
+
+Run `cargo test`, `cargo clippy --all-targets` and `lean proofs/Rigor.lean` — or `cargo run --bin steward`,
+which runs all of them and records the evidence.
 
 ## 1. Proved (about the model)
 
@@ -58,7 +66,8 @@ Not compiler-enforced, and checked instead when rules are proposed: a responsibi
 
 Where strings remain, and why they are not "stringly": the free text of `Content::Note` and the program name
 in `Content::Command` (documentation that nothing interprets); the diagnostic text of a JSON encoding or
-parsing failure; and the JSON serialisation boundary itself, where an unknown variant or invalid name is
+parsing failure; the statements and notes of the claim records (prose for people; what a record cites is
+checked to exist); and the JSON serialisation boundary itself, where an unknown variant or invalid name is
 rejected on the way in.
 
 ## 2. Model-checked (finite instances)
@@ -68,6 +77,7 @@ rejected on the way in.
 | M1 | Absorbing statuses are never left; `satisfied` is undone only by reassessment or release; nothing is pending after its deadline; a debtor cannot release itself | one commitment; 12 stimuli; explored to a fixed point | `model_check_single_commitment` |
 | M2 | Mutually independent stimuli reach one state under every ordering | 5 stimuli (120 orders) in tests; 6 (720) in the measurements | `independent_stimuli_commute` |
 | M3 | The explorer reports a shortest counterexample for a false invariant | seeded bug | `model_checker_finds_a_seeded_bug` |
+| M4 | The ledger alone, whatever it is told and in whatever order: balances always sum to what was minted; a refused order moves nothing; every order is answered exactly once; only known accounts hold balances. Checked on the concept by itself, with no system assembled around it | 3 accounts (one never opened), 2 resources, 12 inputs including zero, more-than-held and the largest number; every reachable state | `the_laws_hold_in_every_reachable_state_of_a_small_world` |
 
 ## 3. Tested
 
@@ -82,14 +92,14 @@ rejected on the way in.
 | P7 | The grounded labelling algorithm equals the textbook least fixed point | 300 random graphs ≤ 8 nodes | `grounded_matches_the_textbook_definition_on_random_graphs` |
 | P8 | Work caused by one refutation does not depend on world size | N = 20 vs 200 exactly; timed to N = 5000 | `revision_work_is_independent_of_world_size`, measurements §3 |
 | P9 | Judgments changed by a stimulus lie inside the static cone of the change | one point of one scenario (see P23 for the property test) | `exact_impact_lies_inside_the_static_cone` |
-| P10 | The nine demonstrations of the brief | scenario and four variants | `crates/rigor/tests/scenario.rs` |
-| P11 | Evidence bound to a file digest goes stale when the file changes, using a real subprocess | one loop | `crates/rigor/tests/adapters.rs` |
+| P10 | The nine demonstrations of the brief | scenario and four variants | `app/tests/scenario.rs` |
+| P11 | Evidence bound to a file digest goes stale when the file changes, using a real subprocess | one loop | `app/tests/adapters.rs` |
 | P12 | Ill-sorted responsibility rules are rejected before enactment | three malformed rule sets | `rules_without_a_unique_meaning_are_rejected` |
 | P13 | Members can be admitted at run time only by a charter-holder; an admitted member has the same standing as a founding one | constructed | `members_can_be_admitted_at_run_time_only_by_charter` |
 | P14 | A maintenance commitment is violated exactly while its proposition stands refuted within the period, is discharged at the end otherwise, and is revised when the refutation is undone | constructed; plus exhaustive exploration of one commitment | `a_maintenance_commitment_is_about_not_being_refuted`, `model_check_maintenance_commitment` |
 | P15 | A real git history built with real `git` (reverts, a revert of a revert, a self-revert, an automated committer) is ingested and the conclusions equal an independent oracle | 6 commits | `a_real_git_history_with_reverts_and_reverts_of_reverts` |
 | P16 | The steward's record survives restarts, records unevidenced days as violations with findings, closes roadmap items only on the project's acceptance, and sets aside an edited log | constructed repository | `the_steward_keeps_an_honest_record_across_runs` |
-| P17 | Judging does no work while nothing is violated, whatever the number of members | 600 members | `judging_costs_nothing_until_…` |
+| P17 | Judging does no work while nothing is violated, whatever the number of members | 600 members | `judging_costs_nothing_until_something_is_violated_whatever_the_membership` |
 | P18 | **Real data**: 4,000 consecutive real commits (84 resolvable reverts, 6 reverts of reverts, 270 sponsored admissions) agree with the oracle and keep every invariant | fixture checked into the repository | `four_thousand_real_commits_agree_with_the_oracle_and_keep_every_invariant` |
 | P19 | A world resumed from a snapshot file and continued, compacting as it goes, equals the uninterrupted one in state, chain head and conclusions; a corrupt or ill-fitting snapshot is refused | the same fixture | `a_snapshot_resumes_exactly_and_memory_need_not_grow_with_history` |
 | P20 | Two real histories as nested organisations, interleaved commit by commit, each conclude exactly what they conclude alone | the same fixture, halved | `nested_organisations_on_real_data_behave_exactly_as_they_do_alone` |
@@ -99,19 +109,23 @@ rejected on the way in.
 | P25 | A capability bound to a purpose can be used and delegated only for that purpose | constructed | `a_capability_can_be_bound_to_one_purpose` |
 | P26 | Expulsion ends a member's power to act and revokes what they delegated, while their obligations remain; a role can be moved, and duties created afterwards fall on the new holder | constructed | `a_member_can_be_expelled_and_roles_reassigned_by_charter` |
 | P27 | A snapshot is resumed only if an audit by replay is accepted evidence; a forged but self-consistent snapshot is caught by the audit | scenario | `a_snapshot_is_resumed_only_once_someone_trusted_has_shown_it_faithful` |
-| P28 | Review trailers enter as evidence; the reflector proposes a maintenance period from observed refutation delays, and it takes effect only on approval | 1,500 real commits; constructed | `review_trailers_are_evidence_…`, `the_reflector_learns_the_maintenance_period_…` |
+| P28 | Review trailers enter as evidence; the reflector proposes a maintenance period from observed refutation delays, and it takes effect only on approval | 1,500 real commits; constructed | `review_trailers_are_evidence_and_the_period_is_calibrated_from_the_record`, `the_reflector_learns_the_maintenance_period_from_how_late_refutations_arrive` |
 | P29 | An event that changed shape between schemas is upgraded, not lost; changing the stored form of events without bumping the schema fails a test | constructed; fixed sample | `an_event_that_changed_shape_is_upgraded_not_lost`, `changing_the_vocabulary_without_bumping_the_schema_fails_here` |
 | P30 | **A real package registry**: 3,679 real releases (282 yanked): the fit set equals an independent oracle; releases resting on a yanked one lose support; revision work stays local | fixture in the repository | `a_real_registry_with_yanks_agrees_with_the_oracle` |
 | P31 | **Real forge reviews**: approvals support, standing change-requests rebut; objected changes are not accepted | 935 real commits, 52 real pull requests | `real_pull_request_reviews_enter_as_evidence_for_and_against` |
-| P32 | **Two institutions interacting**: an outer duty becomes inner work; the inner result crosses only as a claim; inner evidence and identities do not cross; each institution judges at its own level | constructed | `federation::a_duty_laid_on_an_organisation_...`, `federation::each_institution_judges_at_its_own_level_...` |
+| P32 | **Two institutions interacting**: an outer duty becomes inner work; the inner result crosses only as a claim; inner evidence and identities do not cross; each institution judges at its own level | constructed | `federation::a_duty_laid_on_an_organisation_becomes_work_inside_it_and_its_report_is_only_a_claim`, `federation::each_institution_judges_at_its_own_level_when_the_inner_work_fails` |
 | P33 | **It knows what it cannot do**: each ability's needs are probed for real; what is lacking is named; its account of itself is recorded as evidence and revised when the facts or the owner's decisions change; re-examining with nothing changed adds nothing | constructed repository, no credential | `it_knows_what_it_cannot_do_and_exactly_what_is_lacking` |
 | P34 | **The model budget is enforced by the institution's own ledger**: nothing is spent before the owner grants a budget, nothing beyond it, and neither the service account nor a model can take or grant one | constructed | `the_model_budget_is_enforced_by_the_institutions_own_ledger` |
-| P35 | **Controlled change**: applied only when verified by every check, approved by the owner and assessed sound; the proposer's word counts for nothing; a failed verification and the owner's rejection are never outweighed; what is applied is exactly what was verified; an edit applies only to the content it was written against and may not discard most of a file; code and proofs are out of reach | constructed repository, checks injected | five tests in `crates/rigor/tests/office.rs` |
+| P35 | **Controlled change**: applied only when verified by every check, approved by the owner and assessed sound; the proposer's word counts for nothing; a failed verification and the owner's rejection are never outweighed; what is applied is exactly what was verified; an edit applies only to the content it was written against and may not discard most of a file; code and proofs are out of reach | constructed repository, checks injected | four tests in `app/tests/office.rs` |
 | P36 | A project founded under an older constitution is re-founded with its history, in the open | constructed | `a_project_founded_under_an_older_constitution_is_refounded_with_its_history` |
 | P37 | The dashboard puts what needs the owner first and escapes outside text | constructed | `the_dashboard_puts_what_needs_the_owner_first` |
 | P38 | **The runtime agrees with a transcription of the proved model**: 400 random triples of units driven by the real kernel and by a line-by-line transcription of the Lean `Unit`/`par`/`drive` give identical logs, including when cut off by fuel | random step tables | `the_runtime_agrees_with_a_transcription_of_the_proved_model` |
 | P39 | **Real forge reviews at scale, with retraction**: 6,000 real happenings; superseded and dismissed reviews are withdrawn; every assessment equals the oracle | fixture in the repository | `real_forge_reviews_with_superseded_and_dismissed_reviews_agree_with_the_oracle` |
 | P23 | Every existing judgment a stimulus changes lies inside the static cone of the change (closes U3) | 360 random cases, over 100 non-trivial | `exact_impact_always_lies_inside_the_static_cone` |
+| P40 | **The code keeps its shape**: the waist depends on no other crate and stays within a line budget; a concept depends on the waist and the reasoners and on no other concept; the assembly does not reach the outside world; no file grows past its limit, and the files already too long may only shrink | every manifest and source file of the repository | `claims/tests/honest.rs` |
+| P41 | **No claim outlives its witness**: every test and every theorem a record cites exists by that name; every claim a property rests on is in the book; identifiers are unique | all records | `everything_a_claim_cites_exists` |
+| P42 | **The status document says what the records say**: it is generated from them, and a test fails if the file differs | `docs/03-status-ledger.md` | `the_status_document_says_exactly_what_the_records_say` |
+| P43 | **A concept in its own words is a part of the assembled system**: the ledger, written against its own vocabulary in its own crate, replaces the unit that was written against the system's events, and every test and oracle agrees as before | the whole suite, including 938 real transactions | the suite; in particular the transfer and delegation tests |
 
 ## 3a. Measured on external data (reproducible with network access; not part of `cargo test`)
 
@@ -149,7 +163,7 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 | A-MODEL | Language models are trusted for nothing: what one says becomes a claim or a proposal by the member that asked, and counts only if another trusted party acknowledges it. The reviewing model IS such a party for research answers and change reviews, so two models agreeing can be wrong together | Research answers; change reviews (not verification, not approval) |
 | A-OWNER | Acts recorded as the owner's were made by the owner or on their instruction. In the first session they were made by an assistant acting for the owner | Budgets, decisions, approvals |
 | A-SNAPSHOT | For a plain resume: the snapshot file is the state its log produces. For an attested resume: the auditor who replayed is trustworthy | Everything after a resume |
-| A-TCB | The kernel, reasoners, vocabulary and institutional units are correct (about 4,400 lines) | Everything not independently proved |
+| A-TCB | The waist (budgeted at 1,500 lines, P40), the reasoners, the vocabulary, the concepts and their wiring are correct | Everything not independently proved |
 | A-TOOLS | The Rust compiler, `serde`, `serde_json`, `sha2`, and the Lean kernel are correct | Everything marked compiler-enforced or proved |
 
 ## 5. Unresolved
@@ -171,7 +185,7 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 | U13 | Goals and requirements exist only as propositions and commitment consequents; intentions are not modelled |
 | U14 | Propositions are opaque names: no entailment between them except explicit `derived_from`, and no time-indexed facts (redoing a task needs a new proposition) |
 | U15 | Rules of non-retroactivity are per family and coarse; evidence-rule changes are always retroactive |
-| U16 | The typed vocabulary is closed: a new kind of proposition, tag, method or predicate means editing an enum and recompiling. The kernel and reasoners are generic, so a second domain can bring its own event type, but two domains cannot yet be *combined* without a common enum |
+| U16 | The typed vocabulary is closed: a new kind of proposition, tag, method or predicate means editing an enum and recompiling. The kernel and reasoners are generic, so a second domain can bring its own event type, but two domains cannot yet be *combined* without a common enum. One concept (value) now states its own vocabulary and is wired in by translation (P43); the others still speak the shared one, and propositions are still one closed type |
 | U18 | A snapshot can be audited and resumed only on accepted evidence (P27), but the audit is a full replay by a trusted auditor: cost is not avoided, only moved, and plain `resume` still exists |
 | U19 | Migration replays old stimuli under today's units, so derived events may differ from the old log's; only the stimuli and the old chain head are carried over. Upgrade steps are written by hand for each change of shape; a guard test fails when the stored form of events changes without a schema bump, but nothing checks that a hand-written step preserves meaning |
 | U20 | Backdated records get their period from arrival: a policy, not a model of event time versus record time |
@@ -205,7 +219,7 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 | N19 | **Revising evidence over the whole connected component does not scale** when derivation connects everything: 297 s for a real registry of 13,754 releases. Revision is now downstream-local (1 s); the from-scratch reference is kept and still agrees | real registry | `06-real-data.md` |
 | N20 | **A reviewer model and the checks both passed a destructive edit.** A model asked to revise a document returned only the changed paragraph; the edit would have replaced the file with one line. Caught by the owner's inspection; now refused structurally | first day of real use | `07-running-itself.md` |
 | N21 | **Two models agreeing is not evidence of correctness.** The research reviewer accepted an answer whose change request the same model, asked as a change reviewer, then rejected for over-claiming | first day of real use | `docs/research/README.md` |
-| N22 | **The project's checks do not cover what its documents say.** Every documentation change passes verification trivially | by construction | on the roadmap |
+| N22 | **The project's checks do not cover what its documents say.** Every documentation change passes verification trivially. Since then the status ledger is generated from checked records (P41, P42); the other documents are still uncovered | by construction | on the roadmap |
 | N18 | **A vocabulary change silently orphaned a stored log.** Adding fields to events made the steward's own log unparseable; it set the log aside and began a new one, losing its record of closed items. Found on the next run. Fixed by bumping the schema, writing the upgrade step, recovering the log by migration, and adding the guard test (P29) | this repository, 2026-11-18 | `.rigor/` |
 | N14 | **Nobody is outside the model.** When the service works, the scripted Alice never pays what she promised, and the same rules find her accountable and liable. Not a bug | scenario, working service | `working_service_everything_is_satisfied` |
 
@@ -218,21 +232,21 @@ and Gödel/Löb-style limits (the system offers no argument for the soundness of
 
 | Property | Preserved by composition | Statically checked | Enforced at run time | Observable only | Rests on external trust | Not established |
 |---|---|---|---|---|---|---|
-| Unit-local safety invariants | yes (T1) | per unit | | | A-UNIT | |
-| Refinement / substitution of a part | yes (T2, T3) | relation supplied by hand | | | | automation (U7) |
-| One owner per institutional event kind | yes | at composition time | | | | |
-| Well-formedness of events, acts, ids, templates, amendments | yes | **by the Rust compiler** (C1–C9) | at the JSON boundary | | A-TOOLS | |
-| State-locality of units | yes | **by the Rust compiler** (C10) | | | | purity (A-UNIT) |
-| No amplification of authority | yes (T6; P5) | | at delegation | | A-GENESIS | |
-| Revocation and budgets | | | yes, relative to log order | | A-ORDER | under partition (U8) |
-| Resource conservation | yes (T7; P5) | | by the ledger | | | |
-| Log integrity | | | | tampering is detected, not prevented | A-HASH | |
-| Fulfilment of commitments | | | | violations are detected, not prevented | A-CLOCK | |
-| Truth of a claim | | | | | A-TRUST, A-ADAPTER | never established |
-| Uniqueness of an assessment | n/a | by construction (grounded) | | | | |
-| Verdict follows from the rules | n/a | unique model (stratified) | | | A-RULES | that the rules are just |
-| Well-formed rule set | n/a | at every amendment | | | | |
-| Confluence | for independent events (T5; M2) | | | | | in general (U5) |
-| Termination of a cascade | | | fuel bound only | | | U2 |
-| Liveness | **no** (N2) | | | | | U6 |
-| Confidentiality | | | | | | U11 |
+| Unit-local safety invariants | yes (T1) | per unit |  |  | A-UNIT |  |
+| Refinement / substitution of a part | yes (T2, T3) | relation supplied by hand |  |  |  | automation (U7) |
+| One owner per institutional event kind | yes | at composition time |  |  |  |  |
+| Well-formedness of events, acts, ids, templates, amendments | yes | **by the Rust compiler** (C1–C9) | at the JSON boundary |  | A-TOOLS |  |
+| State-locality of units | yes | **by the Rust compiler** (C10) |  |  |  | purity (A-UNIT) |
+| No amplification of authority | yes (T6; P5) |  | at delegation |  | A-GENESIS |  |
+| Revocation and budgets |  |  | yes, relative to log order |  | A-ORDER | under partition (U8) |
+| Resource conservation | yes (T7; P5) | model-checked on the ledger alone (M4) | by the ledger |  |  |  |
+| Log integrity |  |  |  | tampering is detected, not prevented | A-HASH |  |
+| Fulfilment of commitments |  |  |  | violations are detected, not prevented | A-CLOCK |  |
+| Truth of a claim |  |  |  |  | A-TRUST, A-ADAPTER | never established |
+| Uniqueness of an assessment | n/a | by construction (grounded) |  |  |  |  |
+| Verdict follows from the rules | n/a | unique model (stratified) |  |  | A-RULES | that the rules are just |
+| Well-formed rule set | n/a | at every amendment |  |  |  |  |
+| Confluence | for independent events (T5; M2) |  |  |  |  | in general (U5) |
+| Termination of a cascade |  |  | fuel bound only |  |  | U2 |
+| Liveness | **no** (N2) |  |  |  |  | U6 |
+| Confidentiality |  |  |  |  |  | U11 |
