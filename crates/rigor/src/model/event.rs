@@ -117,6 +117,13 @@ impl Task {
     }
 }
 
+/// One published version of a package.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Release {
+    pub package: Name,
+    pub version: (u64, u64, u64),
+}
+
 /// Something that can be claimed, evidenced and assessed. Structured, never parsed.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Prop {
@@ -128,6 +135,8 @@ pub enum Prop {
     Sound(ChangeId),
     /// The snapshot with this digest is the state its log really produces.
     Faithful(ContentDigest),
+    /// The release is fit to depend on.
+    Fit(Release),
     Fact(Name),
 }
 
@@ -141,6 +150,7 @@ impl fmt::Display for Prop {
             Self::Conforms(r) => write!(f, "conforms({r})"),
             Self::Sound(c) => write!(f, "sound({c})"),
             Self::Faithful(d) => write!(f, "faithful({d})"),
+            Self::Fit(r) => write!(f, "fit({} {}.{}.{})", r.package, r.version.0, r.version.1, r.version.2),
             Self::Fact(n) => write!(f, "fact({n})"),
         }
     }
@@ -574,13 +584,27 @@ pub type Fault = crate::kernel::Fault<Kind, Failure>;
 pub type LeafError = crate::kernel::LeafError<Failure>;
 
 /// Bring an external stimulus written under an older log schema up to the current vocabulary.
-/// Total: every older event has exactly one current form. (Schema 1 differed from 2 only in
-/// the file format, not in the events, so this step is the identity.)
+/// Total: every older event has exactly one current form.
+///
+/// * 1 -> 2 changed only the file's header.
+/// * 2 -> 3: a charter says whether it is delegable (older charters were not); the norm rules
+///   carry a maintenance period (older rule sets meant the then-fixed 30 days). Fields that
+///   became optional (a scope's purpose) need no step.
 #[must_use]
-pub fn upcast(from_schema: u32, event: serde_json::Value) -> serde_json::Value {
-    // One step per schema boundary is applied here, oldest first. There are none yet: the only
-    // boundary so far (1 -> 2) changed the file's header, not any event.
-    let _ = from_schema;
+pub fn upcast(from_schema: u32, mut event: serde_json::Value) -> serde_json::Value {
+    use serde_json::{json, Value};
+    if from_schema < 3 {
+        if let Some(constitution) = event.get_mut("Genesis") {
+            for charter in constitution.get_mut("charters").and_then(Value::as_array_mut).into_iter().flatten() {
+                if let Some(c) = charter.as_object_mut() {
+                    let _ = c.entry("delegable").or_insert(json!(false));
+                }
+            }
+            if let Some(norms) = constitution.pointer_mut("/rules/norms").and_then(Value::as_object_mut) {
+                let _ = norms.entry("maintenance_period").or_insert(json!(30 * 24 * 3600));
+            }
+        }
+    }
     event
 }
 
@@ -608,6 +632,10 @@ pub enum Event {
         entity: Name,
         inner: Box<Event>,
     },
+    /// Something that happened outside a federated boundary, as seen from inside it.
+    Foreign(Box<Event>),
+    /// Something an organisation's envoy addresses to the world outside its boundary.
+    Abroad(Box<Event>),
     /// This log continues one written in an older format, whose chain was verified up to `old_head`.
     Migrated {
         from_schema: u32,
@@ -726,6 +754,8 @@ pub enum Kind {
     ArtifactChanged,
     Settle,
     Scoped,
+    Foreign,
+    Abroad,
     Migrated,
     Do,
     Signal,
@@ -767,6 +797,8 @@ impl Payload for Event {
             Self::Settle => Kind::Settle,
             Self::Scoped { .. } => Kind::Scoped,
             Self::Migrated { .. } => Kind::Migrated,
+            Self::Foreign(_) => Kind::Foreign,
+            Self::Abroad(_) => Kind::Abroad,
             Self::Do { .. } => Kind::Do,
             Self::Signal { .. } => Kind::Signal,
             Self::Ok { .. } => Kind::Ok,
@@ -812,5 +844,17 @@ impl Payload for Event {
     }
     fn scoped_kind() -> Kind {
         Kind::Scoped
+    }
+    fn foreign(inner: Self) -> Self {
+        Self::Foreign(Box::new(inner))
+    }
+    fn foreign_kind() -> Kind {
+        Kind::Foreign
+    }
+    fn as_abroad(&self) -> Option<&Self> {
+        match self {
+            Self::Abroad(inner) => Some(inner),
+            _ => None,
+        }
     }
 }

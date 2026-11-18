@@ -70,7 +70,7 @@ impl<E> Default for Log<E> {
 }
 
 /// The version of the on-disk log format written by this build.
-pub const SCHEMA: u32 = 2;
+pub const SCHEMA: u32 = 3;
 
 #[derive(Serialize, Deserialize)]
 struct Header {

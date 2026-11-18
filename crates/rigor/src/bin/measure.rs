@@ -97,7 +97,19 @@ fn main() -> Result<(), Failed> {
         ),
         (
             "Not trusted for soundness: standard rules, explorer, impact, adapters, actors, scenario, facade, git adapter, steward",
-            &["org.rs", "kernel/explore.rs", "impact.rs", "adapters.rs", "actors.rs", "scenario.rs", "world.rs", "synth.rs", "gitlog.rs", "steward.rs"],
+            &[
+                "org.rs",
+                "kernel/explore.rs",
+                "impact.rs",
+                "adapters.rs",
+                "actors.rs",
+                "scenario.rs",
+                "world.rs",
+                "synth.rs",
+                "gitlog.rs",
+                "chain.rs",
+                "steward.rs",
+            ],
         ),
     ];
     let mut rows = Vec::new();

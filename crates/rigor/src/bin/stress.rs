@@ -205,7 +205,7 @@ fn federate(histories: &[(Name, Vec<Commit>)], solo_results: &[BTreeSet<ChangeId
             "  {name}: refuted {} — equals oracle: {}; equals the same organisation run alone: {}",
             got.refuted.len(),
             got.refuted == oracle(commits),
-            alone.is_empty() || got.refuted == *alone
+            if alone.is_empty() { "not compared in this run".to_owned() } else { (got.refuted == *alone).to_string() }
         );
     }
     println!("  one hash chain over all of it verifies, stretch by stretch: {}", chain_ok && w.rt.log().verify().is_ok());
@@ -226,6 +226,39 @@ fn main() -> Result<(), GitError> {
         let window: Vec<Commit> = commits.into_iter().skip(first).take(count).collect();
         std::fs::write(file, export(&window)).map_err(GitError::Io)?;
         println!("wrote {} commits to {file}", window.len());
+        return Ok(());
+    }
+    if args.first().map(String::as_str) == Some("--registry") {
+        let Some(file) = args.get(1) else {
+            eprintln!("usage: stress --registry <index records, one JSON object per line>");
+            return Ok(());
+        };
+        let text = std::fs::read_to_string(file).map_err(GitError::Io)?;
+        let (all, skipped) = rigor::registry::parse(&text).map_err(|_| GitError::Malformed { record: 0 })?;
+        let mut w = rigor::registry::found()?;
+        let t = Instant::now();
+        let stats = rigor::registry::ingest(&mut w, &all)?;
+        let took = secs(t);
+        println!("================ real package registry records ({skipped} pre-releases or unusable names skipped)");
+        println!("ingested in {took:.2}s: {} events\n{stats:#?}", w.rt.log().next_seq());
+        let (fit, by_status) = rigor::registry::conclusions(&w)?;
+        let expected = rigor::registry::oracle(&all);
+        let not_yanked = all.iter().filter(|p| !p.yanked).count();
+        println!(
+            "releases assessed fit: {} of {} not yanked ({} lost their support with a dependency)",
+            fit.len(),
+            not_yanked,
+            not_yanked.saturating_sub(fit.len())
+        );
+        println!("commitments by status: {by_status:?}");
+        println!("fit set equals independent oracle ({}): {}", expected.len(), fit == expected);
+        let full = w.epi()?.full();
+        println!(
+            "incremental assessment equals from-scratch over {} propositions: {}",
+            full.len(),
+            full.iter().all(|(p, s)| w.epi().is_ok_and(|e| e.standing(p) == *s))
+        );
+        println!("log hash chain verifies: {}", w.rt.log().verify().is_ok());
         return Ok(());
     }
     if args.first().map(String::as_str) == Some("--chain") {

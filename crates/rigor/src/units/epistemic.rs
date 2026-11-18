@@ -11,7 +11,11 @@
 //! * evidence bound to an artifact digest is stale once the artifact differs;
 //! * support rooted in the claimant's own word is inadmissible.
 //!
-//! Reassessment is local to the connected component of the evidence that changed.
+//! Reassessment is local to what lies DOWNSTREAM of the evidence that changed: what it
+//! attacks, what is derived from it, and so on. Everything upstream keeps its recorded label
+//! and enters only as a fixed boundary condition. (An earlier version re-labelled the whole
+//! connected component; on a real dependency graph, where derivation connects everything,
+//! that made each change cost as much as the whole graph.)
 
 use super::meter::Meter;
 use crate::kernel::{digest_of, Envelope, Leaf, Name};
@@ -29,6 +33,16 @@ pub const EPI: Name = Name::lit("epi");
 struct Item {
     ev: Evidence,
     retracted: bool,
+    /// Depth in the derivation graph: what an item is derived from always has a smaller one.
+    /// (Not arrival order: independent arrivals must not change the state.)
+    order: u64,
+    /// Sources of its underived ancestors (fixed at arrival).
+    roots: BTreeSet<ActorId>,
+    /// Effective strength under the rules in force: the weakest link down to its roots.
+    rank: Option<Rank>,
+    /// Recorded results of the last revision that touched it.
+    admissible: bool,
+    label: Label,
 }
 
 impl Item {
@@ -120,26 +134,38 @@ impl Epistemic {
         self.by_art.get(a).cloned().unwrap_or_default()
     }
 
-    /// The sources of the underived ancestors of an item.
-    fn roots(&self, id: EvidenceId) -> BTreeSet<ActorId> {
-        let Some(item) = self.ev.get(&id) else { return BTreeSet::new() };
-        if item.ev.derived_from.is_empty() {
-            return std::iter::once(item.ev.source.clone()).collect();
+    /// The sources of the underived ancestors of an item. Memoised: a derivation graph shares
+    /// ancestors, and walking every path separately is exponential in its depth.
+    fn roots(&self, id: EvidenceId, memo: &mut BTreeMap<EvidenceId, BTreeSet<ActorId>>) -> BTreeSet<ActorId> {
+        if let Some(known) = memo.get(&id) {
+            return known.clone();
         }
-        item.ev.derived_from.iter().flat_map(|p| self.roots(*p)).collect()
+        let out = match self.ev.get(&id) {
+            None => BTreeSet::new(),
+            Some(item) if item.ev.derived_from.is_empty() => std::iter::once(item.ev.source.clone()).collect(),
+            Some(item) => item.ev.derived_from.iter().flat_map(|p| self.roots(*p, memo)).collect(),
+        };
+        let _ = memo.insert(id, out.clone());
+        out
     }
 
     /// Effective strength: the weakest link among the item and what it is derived from.
-    fn rank(&self, id: EvidenceId) -> Option<Rank> {
-        let item = self.ev.get(&id)?;
-        let mut r = *self.rules.ranks.get(&item.ev.method)?;
-        for p in &item.ev.derived_from {
-            r = r.min(self.rank(*p)?);
+    fn rank(&self, id: EvidenceId, memo: &mut BTreeMap<EvidenceId, Option<Rank>>) -> Option<Rank> {
+        if let Some(known) = memo.get(&id) {
+            return *known;
         }
-        Some(r)
+        let out = self.ev.get(&id).and_then(|item| {
+            let mut r = *self.rules.ranks.get(&item.ev.method)?;
+            for p in &item.ev.derived_from {
+                r = r.min(self.rank(*p, memo)?);
+            }
+            Some(r)
+        });
+        let _ = memo.insert(id, out);
+        out
     }
 
-    fn admissible(&self, id: EvidenceId, memo: &mut BTreeMap<EvidenceId, bool>) -> bool {
+    fn admissible(&self, id: EvidenceId, memo: &mut BTreeMap<EvidenceId, bool>, roots: &mut BTreeMap<EvidenceId, BTreeSet<ActorId>>) -> bool {
         if let Some(known) = memo.get(&id) {
             return *known;
         }
@@ -152,10 +178,11 @@ impl Epistemic {
             };
             let fresh = e.artifacts.iter().all(|(a, d)| self.art.get(a) == Some(d));
             let independent = match &e.about {
-                About::Supports(p) if !self.rules.self_support => {
-                    let claimants = self.claims.get(p);
-                    !self.roots(id).iter().any(|s| claimants.is_some_and(|c| c.contains_key(s)))
-                }
+                About::Supports(p) if !self.rules.self_support => match self.claims.get(p) {
+                    // Nobody has claimed it: nothing can be self-support.
+                    None => true,
+                    Some(claimants) => !self.roots(id, roots).iter().any(|s| claimants.contains_key(s)),
+                },
                 About::Supports(_) | About::Rebuts(_) | About::Undercuts(_) => true,
             };
             !item.retracted
@@ -163,7 +190,7 @@ impl Epistemic {
                 && trusted
                 && fresh
                 && independent
-                && e.derived_from.iter().all(|p| self.admissible(*p, memo))
+                && e.derived_from.iter().all(|p| self.admissible(*p, memo, roots))
         });
         let _ = memo.insert(id, ok);
         ok
@@ -210,9 +237,9 @@ impl Epistemic {
     }
 
     fn label(&self, ids: &BTreeSet<EvidenceId>) -> BTreeMap<EvidenceId, Label> {
-        let mut memo = BTreeMap::new();
-        let adm: BTreeSet<EvidenceId> = ids.iter().copied().filter(|e| self.admissible(*e, &mut memo)).collect();
-        let rank: BTreeMap<EvidenceId, Rank> = adm.iter().filter_map(|e| self.rank(*e).map(|r| (*e, r))).collect();
+        let (mut memo, mut roots, mut ranks) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
+        let adm: BTreeSet<EvidenceId> = ids.iter().copied().filter(|e| self.admissible(*e, &mut memo, &mut roots)).collect();
+        let rank: BTreeMap<EvidenceId, Rank> = adm.iter().filter_map(|e| self.rank(*e, &mut ranks).map(|r| (*e, r))).collect();
         let mut direct: Vec<(EvidenceId, EvidenceId)> = Vec::new();
         let mut sides: BTreeMap<&Prop, (Vec<EvidenceId>, Vec<EvidenceId>)> = BTreeMap::new();
         for e in &adm {
@@ -275,13 +302,130 @@ impl Epistemic {
         self.by_prop.keys().chain(self.status.keys()).map(|p| (p.clone(), self.assess(p, &labels))).collect()
     }
 
-    fn reassess(&mut self, ids: &BTreeSet<EvidenceId>, extra: impl IntoIterator<Item = Prop>, out: &mut Vec<Event>) {
-        self.work.add(ids.len());
-        let labels = self.label(ids);
-        let mut props = self.props_of(ids);
+    /// Whether an item passes every test that does not depend on other items' labels,
+    /// given that what it is derived from is admissible.
+    fn passes(&self, item: &Item) -> bool {
+        let e = &item.ev;
+        let trusted = match self.rules.trusted.get(&e.method) {
+            Some(Trust::Anyone) => true,
+            Some(Trust::Only(set)) => set.contains(&e.source),
+            None => false,
+        };
+        let independent = match &e.about {
+            About::Supports(p) if !self.rules.self_support => self.claims.get(p).is_none_or(|claimants| !item.roots.iter().any(|s| claimants.contains_key(s))),
+            About::Supports(_) | About::Rebuts(_) | About::Undercuts(_) => true,
+        };
+        !item.retracted
+            && self.rules.ranks.contains_key(&e.method)
+            && trusted
+            && e.artifacts.iter().all(|(a, d)| self.art.get(a) == Some(d))
+            && independent
+            && e.derived_from.iter().all(|p| self.ev.get(p).is_some_and(|x| x.admissible))
+    }
+
+    /// Everything a change to the seeds can reach: evidence on the same proposition, the
+    /// target of an undercut, and whatever is derived from any of those.
+    fn downstream(&self, seeds: impl IntoIterator<Item = EvidenceId>) -> BTreeSet<EvidenceId> {
+        let mut out = BTreeSet::new();
+        let mut stack: Vec<EvidenceId> = seeds.into_iter().filter(|s| self.ev.contains_key(s)).collect();
+        while let Some(x) = stack.pop() {
+            if !out.insert(x) {
+                continue;
+            }
+            let Some(item) = self.ev.get(&x) else { continue };
+            stack.extend(self.kids.get(&x).into_iter().flatten().copied());
+            match &item.ev.about {
+                About::Undercuts(t) => stack.push(*t),
+                About::Supports(p) | About::Rebuts(p) => stack.extend(self.by_prop.get(p).into_iter().flatten().copied()),
+            }
+        }
+        out
+    }
+
+    /// The admissible items that attack `y` itself (not through what it is derived from).
+    fn direct_attackers(&self, y: EvidenceId, into: &mut BTreeSet<EvidenceId>) {
+        let Some(item) = self.ev.get(&y) else { return };
+        into.extend(self.cutters.get(&y).into_iter().flatten().copied().filter(|c| self.ev.get(c).is_some_and(|x| x.admissible)));
+        let supports = match &item.ev.about {
+            About::Supports(_) => true,
+            About::Rebuts(_) => false,
+            About::Undercuts(_) => return,
+        };
+        let Some(p) = item.prop() else { return };
+        for other in self.by_prop.get(p).into_iter().flatten() {
+            let Some(o) = self.ev.get(other).filter(|o| o.admissible) else { continue };
+            let opposed = matches!(o.ev.about, About::Rebuts(_)) == supports;
+            // An attack on strictly stronger evidence fails.
+            if opposed && item.rank <= o.rank {
+                let _ = into.insert(*other);
+            }
+        }
+    }
+
+    /// Everything that attacks `x`: its own attackers and those of everything it is derived from.
+    fn attackers(&self, x: EvidenceId) -> BTreeSet<EvidenceId> {
+        let mut out = BTreeSet::new();
+        let mut seen = BTreeSet::new();
+        let mut stack = vec![x];
+        while let Some(y) = stack.pop() {
+            if seen.insert(y) {
+                self.direct_attackers(y, &mut out);
+                stack.extend(self.ev.get(&y).into_iter().flat_map(|i| i.ev.derived_from.iter().copied()));
+            }
+        }
+        out
+    }
+
+    /// Revise what lies downstream of the seeds, and announce every assessment that changed.
+    fn revise(&mut self, seeds: impl IntoIterator<Item = EvidenceId>, extra: impl IntoIterator<Item = Prop>, out: &mut Vec<Event>) {
+        let area = self.downstream(seeds);
+        self.work.add(area.len());
+        // 1. Admissibility, shallowest first so that what an item rests on is settled first.
+        let mut ordered: Vec<(u64, EvidenceId)> = area.iter().filter_map(|e| self.ev.get(e).map(|i| (i.order, *e))).collect();
+        ordered.sort_unstable();
+        for (_, e) in &ordered {
+            let ok = self.ev.get(e).is_some_and(|i| self.passes(i));
+            if let Some(i) = self.ev.get_mut(e) {
+                i.admissible = ok;
+            }
+        }
+        // 2. The attack graph over the area; attackers outside it enter with their recorded
+        //    labels as fixed boundary conditions (`None` is a node that is always in).
+        let mut nodes: BTreeSet<Option<EvidenceId>> = BTreeSet::new();
+        let mut attacks: BTreeSet<(Option<EvidenceId>, Option<EvidenceId>)> = BTreeSet::new();
+        for (_, x) in &ordered {
+            if !self.ev.get(x).is_some_and(|i| i.admissible) {
+                continue;
+            }
+            let _ = nodes.insert(Some(*x));
+            for a in self.attackers(*x) {
+                let _ = attacks.insert((Some(a), Some(*x)));
+                if !area.contains(&a) && nodes.insert(Some(a)) {
+                    match self.ev.get(&a).map(|i| i.label) {
+                        Some(Label::In) | None => {}
+                        Some(Label::Out) => {
+                            let _ = nodes.insert(None);
+                            let _ = attacks.insert((None, Some(a)));
+                        }
+                        Some(Label::Undecided) => {
+                            let _ = attacks.insert((Some(a), Some(a)));
+                        }
+                    }
+                }
+            }
+        }
+        let labels = grounded(&nodes, &attacks);
+        for (_, x) in &ordered {
+            let label = labels.get(&Some(*x)).copied().unwrap_or(Label::Out);
+            if let Some(i) = self.ev.get_mut(x) {
+                i.label = label;
+            }
+        }
+        // 3. The propositions touched.
+        let mut props = self.props_of(&area);
         props.extend(extra);
         for p in props {
-            let new = self.assess(&p, &labels);
+            let new = self.assess_recorded(&p);
             let old = self.standing(&p);
             if new != old {
                 out.push(Event::Assessed {
@@ -295,6 +439,21 @@ impl Epistemic {
                 let _ = self.status.insert(p, new);
             }
         }
+    }
+
+    fn assess_recorded(&self, p: &Prop) -> Standing {
+        let labels: BTreeMap<EvidenceId, Label> =
+            self.by_prop.get(p).into_iter().flatten().filter_map(|e| self.ev.get(e).filter(|i| i.admissible).map(|i| (*e, i.label))).collect();
+        self.assess(p, &labels)
+    }
+
+    /// Effective rank from the recorded ranks of what an item is derived from.
+    fn rank_of(&self, method: Method, derived_from: &BTreeSet<EvidenceId>) -> Option<Rank> {
+        let mut r = *self.rules.ranks.get(&method)?;
+        for p in derived_from {
+            r = r.min(self.ev.get(p)?.rank?);
+        }
+        Some(r)
     }
 
     fn attest(&mut self, by: &ActorId, a: &crate::model::Attestation, out: &mut Vec<Event>) -> Result<(), LeafError> {
@@ -343,9 +502,15 @@ impl Epistemic {
             let _ = self.by_art.entry(art.clone()).or_default().insert(id);
         }
         out.push(Event::EvidenceRecorded(ev.clone()));
-        let _ = self.ev.insert(id, Item { ev, retracted: false });
-        let comp = self.component([id]);
-        self.reassess(&comp, [], out);
+        let roots: BTreeSet<ActorId> = if ev.derived_from.is_empty() {
+            std::iter::once(ev.source.clone()).collect()
+        } else {
+            ev.derived_from.iter().filter_map(|p| self.ev.get(p)).flat_map(|i| i.roots.iter().cloned()).collect()
+        };
+        let rank = self.rank_of(ev.method, &ev.derived_from);
+        let depth = ev.derived_from.iter().filter_map(|p| self.ev.get(p)).map(|i| i.order).max().map_or(0, |d| d + 1);
+        let _ = self.ev.insert(id, Item { ev, retracted: false, order: depth, roots, rank, admissible: false, label: Label::Out });
+        self.revise([id], [], out);
         Ok(())
     }
 }
@@ -367,23 +532,29 @@ impl Leaf<Event> for Epistemic {
             Event::RulesChanged(rc) => {
                 self.rules = rc.rules.evidence.clone();
                 self.version = rc.version;
-                let all: BTreeSet<EvidenceId> = self.ev.keys().copied().collect();
+                // Ranks are rule-dependent: recompute them shallowest first, then revise everything.
+                let mut ordered: Vec<(u64, EvidenceId)> = self.ev.iter().map(|(e, i)| (i.order, *e)).collect();
+                ordered.sort_unstable();
+                for (_, e) in &ordered {
+                    let rank = self.ev.get(e).and_then(|i| self.rank_of(i.ev.method, &i.ev.derived_from));
+                    if let Some(i) = self.ev.get_mut(e) {
+                        i.rank = rank;
+                    }
+                }
                 let known: Vec<Prop> = self.status.keys().cloned().collect();
-                self.reassess(&all, known, &mut out);
+                self.revise(ordered.into_iter().map(|(_, e)| e), known, &mut out);
             }
             Event::ArtifactChanged { artifact, digest } => {
                 if self.art.get(artifact) != Some(digest) {
                     let _ = self.art.insert(artifact.clone(), *digest);
-                    let comp = self.component(self.evidence_about_artifact(artifact));
-                    self.reassess(&comp, [], &mut out);
+                    self.revise(self.evidence_about_artifact(artifact), [], &mut out);
                 }
             }
             Event::Ok { by, act: Act::Claim { prop }, .. } => {
                 let claimants = self.claims.entry(prop.clone()).or_default();
                 if !claimants.contains_key(by) {
                     let _ = claimants.insert(by.clone(), self.now);
-                    let comp = self.component(self.evidence_on(prop));
-                    self.reassess(&comp, [prop.clone()], &mut out);
+                    self.revise(self.evidence_on(prop), [prop.clone()], &mut out);
                 }
             }
             Event::Ok { by, act: Act::Retract { evidence }, .. } => match self.ev.get_mut(evidence) {
@@ -391,8 +562,7 @@ impl Leaf<Event> for Epistemic {
                     if !item.retracted {
                         item.retracted = true;
                         out.push(Event::EvidenceRetracted { id: *evidence, by: by.clone() });
-                        let comp = self.component([*evidence]);
-                        self.reassess(&comp, [], &mut out);
+                        self.revise([*evidence], [], &mut out);
                     }
                 }
                 Some(_) | None => out.push(Event::EvidenceRejected { by: by.clone(), reason: EvidenceError::NotTheSource }),

@@ -17,11 +17,11 @@ are denied by lint in library code.
 ```sh
 cargo run --bin scenario                      # the end-to-end demonstrator, narrated
 cargo run --bin steward                       # the project checks itself and records the evidence
-cargo test                                    # 59 tests + 8 doctests; includes 4,000 real commits
+cargo test                                    # 72 tests + 8 doctests; includes six slices of real data
 cargo clippy --all-targets                    # the strict lint set in Cargo.toml; must be clean
 cargo run --release --bin measure             # regenerates docs/04-measurements.md
 cargo run --release --bin stress -- <bare git repo>...   # real histories through the whole system
-lean proofs/Rigor.lean                        # 7 machine-checked theorems about the model
+lean proofs/Rigor.lean                        # 9 machine-checked theorems about the model
 ```
 
 Dependencies: `serde`, `serde_json`, `sha2`. Lean 4 is needed only to re-check the proofs.
@@ -74,23 +74,38 @@ is really running the checks, bound to digests of the real files.
   right within a week, discharged only by evidence that the requirement holds again.
 - The roadmap's next items are commitments in the same world, each with a review-by day, closed only by the
   project's acceptance.
-- Its log survives restarts and format changes: it has already migrated its own log once.
+- Its log survives restarts and format changes: it has migrated its own log twice, once across a real
+  change in the shape of events (after first losing track of it; see N18 in the ledger).
 
-A **reflector** unit goes one step further for rules: it records how each method of evidence fares and, past
-a threshold, proposes lowering that method's rank through ordinary governance. It cannot enact anything.
+A **reflector** unit goes one step further, for the rules themselves. It records how each method of evidence
+fares and how late refutations arrive, and past a threshold it proposes a change — a lower rank for a method,
+a longer maintenance period — through ordinary governance. It cannot enact anything. On the real histories
+it lengthened each project's period two or three times, differently for each, and proposed no rank change.
 
 None of this writes code. It notices, records, proposes and holds to account. `scripts/pre-push` is an opt-in
 git hook that runs the steward (`git config core.hooksPath scripts`).
 
 ## It has met real data
 
-Three public git histories — git, Node.js, Kubernetes; 276,548 commits, 3.7 million events — were run through
-the whole system, with reverts as real refutations, newcomers admitted by sponsors under delegated authority,
-a rule amendment applied to each record, and the three projects nested as separate organisations in one
-world. Its conclusions matched an independent oracle throughout. The work exposed a 20-fold scaling defect,
-unbounded restart cost, a log format that could not evolve, and several missing concepts; those were fixed.
-What it still does not handle is listed in `docs/06-real-data.md`. A 4,000-commit real slice is part of
-`cargo test`.
+- **Three public git histories** — git, Node.js, Kubernetes; 276,548 commits, 4.3 million events — with
+  reverts as refutations, 128,112 recorded reviews as evidence, newcomers admitted by sponsors under delegated
+  authority, the rules revised from the record, and the three projects nested as separate organisations in
+  one world. Conclusions matched an independent oracle throughout.
+- **Real transfers of value**: 3,101 real Bitcoin transactions, each signed input treated as a delegation
+  limited to its amount and bound to its transaction. None was wrongly refused, every replay was refused,
+  and every balance equals plain bookkeeping.
+- **A real package registry**: 13,754 crate releases and 910 yanks. A release rests on what it depends on,
+  and a yank is a retraction: 308 releases that were never yanked are not held fit because they rest on one
+  that was. Matches an independent oracle.
+- **Real forge reviews**: a sample of 52 pull requests, approvals for and standing objections against.
+
+Separately, on a constructed case, **two institutions interact**: an organisation behind a federated boundary
+is held to a duty by the outer institution, does the work under its own, and can only *claim* the result
+outward.
+
+The work exposed two scaling defects (one 20-fold, one 300-fold), unbounded restart cost and memory, a log
+format that could not evolve, and several missing concepts; those were fixed. What it still does not handle is listed in
+`docs/06-real-data.md`. Slices of all of this data are part of `cargo test`.
 
 ## Where to read
 
@@ -101,7 +116,7 @@ What it still does not handle is listed in `docs/06-real-data.md`. A 4,000-commi
 | `docs/03-status-ledger.md` | **Every claim, marked proved / compiler-enforced / model-checked / tested / assumed / unresolved**; negative results; trusted assumptions |
 | `docs/04-measurements.md` | Trusted-base size, encoding overhead, scaling, state-space growth (release build) |
 | `docs/05-roadmap.md` | What it lacks: address next / deferred / parked, with reasons and triggers |
-| `docs/06-real-data.md` | Stress against three real git histories (276,548 commits): results, what broke, what remains |
+| `docs/06-real-data.md` | Stress against real data (git histories, Bitcoin blocks, a package registry, forge reviews): results, what broke, what remains |
 
 ## Layout
 
@@ -111,9 +126,9 @@ crates/rigor/src/
                explore.rs                          bounded model checker
   logic/       argue.rs datalog.rs                 the two reasoners (generic)
   model/       ids.rs event.rs rules.rs            the closed, typed vocabulary
-  units/       institution ledger epistemic norms adjudicator governance reflector
+  units/       institution ledger epistemic norms adjudicator governance reflector envoy
   org.rs actors.rs scenario.rs world.rs impact.rs adapters.rs synth.rs
-  gitlog.rs steward.rs                             real-data adapter; self-stewardship
+  gitlog.rs chain.rs registry.rs steward.rs        real-data adapters; self-stewardship
   bin/         scenario.rs measure.rs stress.rs steward.rs
 crates/rigor/tests/   kernel scenario properties counterexamples adapters realworld
 proofs/Rigor.lean
@@ -126,8 +141,9 @@ proofs/Rigor.lean
 - The system never establishes that a claim is *true*. It computes an assessment from evidence supplied by
   sources it was told to trust.
 - There is one log and one clock. Distribution, partitions and confidentiality are not addressed.
-- Real data has exercised admission, delegation, commitments, evidence, adjudication, governance and nesting,
-  but not resource transfers or spending limits, and a snapshot is trusted rather than attested.
+- Real data has exercised every unit on three kinds of record, but through mappings that are
+  interpretations (a revert is a refutation; a signature is a bounded delegation; a yank is a retraction),
+  checked against oracles written by the same author.
 - Liveness is not established for anything, and is shown not to compose.
 - Strict typing closes the vocabulary: adding a new kind of proposition, tag or predicate means changing an
   enum and recompiling. That is a deliberate trade, recorded as U16 in the ledger.

@@ -28,16 +28,30 @@ commitment on the record.
 The three items marked "was item N" were closed through the steward itself (`steward accept <item>`): they
 now stand in its log as satisfied commitments.
 
+## Closed in the last round (through the steward)
+
+| What | Evidence |
+|---|---|
+| Snapshots are attested, not trusted: an auditor replays, attests, and resume requires that evidence to be accepted | `a_snapshot_is_resumed_only_once_someone_trusted_has_shown_it_faithful` |
+| Real data for transfers and budgets: 938 real Bitcoin transactions, none wrongly refused, every replay refused, balances equal to bookkeeping | `real_bitcoin_blocks_settle_with_every_budget_enforced`; `06-real-data.md` Part 2 |
+| Expulsion and role change, by charter | `a_member_can_be_expelled_and_roles_reassigned_by_charter` |
+| Review evidence from commit trailers (128,112 real reviews) | `review_trailers_are_evidence_and_the_period_is_calibrated_from_the_record` |
+| The maintenance period is a rule the system revises from its record | `the_reflector_learns_the_maintenance_period_from_how_late_refutations_arrive`; `06-real-data.md` |
+| Capabilities bound to one purpose | `a_capability_can_be_bound_to_one_purpose` |
+| Memory bounded in long runs (4.7 GB → 1.28 GB for 4.3 million events) | `stress --federate-only` |
+
 ## Address next (ordered; each is a steward commitment with a review-by day)
 
 | # | Item | What is wrong today | Done when | Review within |
 |---|---|---|---|---|
-| 1 | **Attest snapshots** instead of trusting them | A snapshot's digest shows it is uncorrupted, not that it is the state its log produces | A snapshot carries evidence (a recorded full replay by a named party) that the system assesses like any other claim | 45 days |
-| 2 | **Forge adapter** for review and CI evidence | Git shows only "someone else committed it"; the real evidence is in pull requests | Reviews and check runs enter as evidence bound to commit digests | 60 days |
-| 3 | **Real data for transfers and budgets** | Resource transfers, spending limits and conservation have met no real data | A real ledger-like dataset is run through the ledger and authority units with an independent check | 60 days |
-| 4 | **Expulsion and role change** (rest of U12) | A member can be admitted but never lose standing | Governed acts for both, with their effect on existing capabilities and commitments defined and tested | 60 days |
-| 5 | **Open the vocabulary by type parameters** (U16) | Adding a kind of proposition or tag means editing a shared enum | Units are generic in `Prop`/`Tag`/`Pred`; the git and steward domains bring their own | 90 days |
-| 6 | **Verify the kernel against the Lean model** (U1) | Nothing proves the Rust kernel realises the model the theorems are about | T1–T5 proved of the Rust `Par`/`Runtime`, including the scheduler and `settle` | 180 days |
+| 1 | **Forge adapter** | Projects that record review in pull requests show no review evidence at all (Kubernetes: 0) | Reviews and check runs enter as evidence bound to commit digests | 60 days |
+| 2 | **Organisations interacting across boundaries** (U9) | Nested organisations have only ever run side by side | One organisation acts as a member of another, with identities and evidence translated at the boundary | 75 days |
+| 3 | **A second kind of real record** | Only version-control histories and a ledger have been tried | A real dataset of another kind (contracts, incidents, procurement) with an independent check | 75 days |
+| 4 | **Open the vocabulary by type parameters** (U16) | Each new domain so far has added variants to shared enums | Units are generic in `Prop`/`Tag`/`Pred` | 90 days |
+| 5 | **Verify the kernel against the Lean model** (U1) | Nothing proves the Rust kernel realises the model the theorems are about | T1–T5 proved of the Rust `Par`/`Runtime` | 180 days |
+
+Items 4 and 5 are large and are deliberately not attempted piecemeal: a partial version of either would add
+risk to the trusted base without removing an assumption.
 
 ## Deferred (worth doing; not blocking; each with the trigger that would promote it)
 

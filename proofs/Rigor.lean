@@ -104,6 +104,40 @@ theorem par_assoc {E : Type} (A B C : Unit E) :
   subst h1; subst h2; subst h3
   exact ⟨⟨rfl, rfl, rfl⟩, by simp [par, List.append_assoc]⟩
 
+/-! ## 1a. The scheduler
+
+The runtime is not just `par`: it is a FIFO queue in which every output is fed back as a later
+input. `drive` is that loop (bounded by fuel, as in the implementation); its result is the log. -/
+
+/-- Process a queue of events first-in first-out, appending each step's outputs to the queue,
+    for at most `fuel` steps. Returns the sequence of events processed: the log. -/
+def drive {E : Type} (U : Unit E) : Nat → U.S → List E → List E
+  | 0, _, _ => []
+  | _ + 1, _, [] => []
+  | n + 1, s, e :: q => e :: drive U n (U.step s e).1 (q ++ (U.step s e).2)
+
+/-- T8: refinement is preserved by the scheduler, feedback included. Two units related by a
+    simulation produce the same log from the same stimuli, for any fuel. -/
+theorem sim_drive {E : Type} (A B : Unit E) (R : A.S → B.S → Prop) (h : Sim A B R) :
+    ∀ n a b q, R a b → drive A n a q = drive B n b q := by
+  intro n
+  induction n with
+  | zero => intro a b q _; simp [drive]
+  | succ n ih =>
+    intro a b q r
+    cases q with
+    | nil => simp [drive]
+    | cons e q =>
+      have hs := h.ind a b e r
+      simp only [drive]
+      rw [hs.2, ih _ _ _ hs.1]
+
+/-- T9: under the scheduler, bracketing of a composition cannot be observed in the log. -/
+theorem drive_assoc {E : Type} (A B C : Unit E) (n : Nat) (q : List E) :
+    drive (par (par A B) C) n (par (par A B) C).init q
+      = drive (par A (par B C)) n (par A (par B C)).init q :=
+  sim_drive _ _ _ (par_assoc A B C) n _ _ q (par_assoc A B C).base
+
 /-! ## 2. Independence: events with disjoint footprints commute -/
 
 /-- A unit that ignores events outside its footprint `acc`. -/
@@ -207,6 +241,8 @@ end Rigor
 #print axioms Rigor.sim_par
 #print axioms Rigor.sim_trace
 #print axioms Rigor.par_assoc
+#print axioms Rigor.sim_drive
+#print axioms Rigor.drive_assoc
 #print axioms Rigor.commute
 #print axioms Rigor.no_amplification
 #print axioms Rigor.transfer_conserves

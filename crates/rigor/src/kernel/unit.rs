@@ -29,6 +29,11 @@ pub trait Payload: Clone + Debug + serde::Serialize + 'static {
     fn scoped(entity: Name, inner: Self) -> Self;
     fn as_scoped(&self) -> Option<(&Name, &Self)>;
     fn scoped_kind() -> Self::Kind;
+    /// Mark an event as having come in from outside a federated boundary.
+    fn foreign(inner: Self) -> Self;
+    fn foreign_kind() -> Self::Kind;
+    /// If this event is addressed to the world outside a federated boundary, what it carries.
+    fn as_abroad(&self) -> Option<&Self>;
 }
 
 /// From whose point of view an actor is named.
@@ -324,12 +329,23 @@ pub struct Entity<E: Payload> {
     inner_inputs: BTreeSet<E::Kind>,
     imports: BTreeSet<E::Kind>,
     exports: BTreeSet<E::Kind>,
+    /// A federated boundary keeps the two sides' vocabularies apart: what comes in arrives
+    /// marked as foreign (so the inside's own units do not mistake an outside act for one of
+    /// theirs), and only what the inside explicitly addresses abroad goes out.
+    federated: bool,
 }
 
 impl<E: Payload> Entity<E> {
+    /// A boundary around an organisation that deals with the outside only through its own
+    /// envoy: `imports` arrive wrapped as foreign; only events addressed abroad leave.
+    #[must_use]
+    pub fn federated(name: Name, inner: Box<dyn Unit<E>>, imports: BTreeSet<E::Kind>, exports: BTreeSet<E::Kind>) -> Self {
+        Self { federated: true, ..Self::new(name, inner, imports, exports) }
+    }
+
     #[must_use]
     pub fn new(name: Name, inner: Box<dyn Unit<E>>, imports: BTreeSet<E::Kind>, exports: BTreeSet<E::Kind>) -> Self {
-        Self { name, inner_inputs: inner.inputs(), inner, imports, exports }
+        Self { name, inner_inputs: inner.inputs(), inner, imports, exports, federated: false }
     }
 }
 
@@ -360,6 +376,7 @@ impl<E: Payload> Unit<E> for Entity<E> {
         let outer = |w: &Who| match w {
             Who::Here(p) | Who::Outer(p) => Who::Outer(p.clone()),
         };
+        let wrapped;
         let (event, who) = match env.event.as_scoped() {
             Some((entity, inner)) if *entity == self.name => {
                 let who = match &env.who {
@@ -370,6 +387,10 @@ impl<E: Payload> Unit<E> for Entity<E> {
             }
             Some(_) => return Ok(Vec::new()),
             None if env.event.kind() == E::settle_kind() => (env.event, env.who.clone()),
+            None if self.imports.contains(&env.event.kind()) && self.federated => {
+                wrapped = E::foreign(env.event.clone());
+                (&wrapped, outer(&env.who))
+            }
             None if self.imports.contains(&env.event.kind()) => (env.event, outer(&env.who)),
             None => return Ok(Vec::new()),
         };
@@ -380,7 +401,12 @@ impl<E: Payload> Unit<E> for Entity<E> {
         let mut out = Vec::new();
         for o in self.inner.step(&inner_env)? {
             let src = o.src.inside(&self.name);
-            if self.exports.contains(&o.event.kind()) && o.event.as_scoped().is_none() {
+            if self.federated {
+                match o.event.as_abroad() {
+                    Some(sent) if self.exports.contains(&sent.kind()) => out.push(Emit { event: sent.clone(), actor: Path::of(&self.name), src }),
+                    Some(_) | None => out.push(Emit { event: E::scoped(self.name.clone(), o.event), actor: o.actor.inside(&self.name), src }),
+                }
+            } else if self.exports.contains(&o.event.kind()) && o.event.as_scoped().is_none() {
                 out.push(Emit { event: o.event, actor: Path::of(&self.name), src });
             } else {
                 out.push(Emit { event: E::scoped(self.name.clone(), o.event), actor: o.actor.inside(&self.name), src });
@@ -395,6 +421,7 @@ impl<E: Payload> Unit<E> for Entity<E> {
             inner_inputs: self.inner_inputs.clone(),
             imports: self.imports.clone(),
             exports: self.exports.clone(),
+            federated: self.federated,
         })
     }
     fn hash_state(&self, h: &mut dyn Hasher) {

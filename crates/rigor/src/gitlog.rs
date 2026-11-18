@@ -105,6 +105,8 @@ pub struct Commit {
     /// People the commit message records as having reviewed or acknowledged the change
     /// (`Reviewed-by:` / `Acked-by:` trailers), other than its author.
     pub reviewers: Vec<ActorId>,
+    /// People a forge records as having requested changes and never approved (see [`apply_reviews`]).
+    pub objectors: Vec<ActorId>,
 }
 
 fn identity(email: &str, name: &str) -> Result<Identity, NameError> {
@@ -163,6 +165,7 @@ pub fn parse(output: &str) -> Result<Vec<Commit>, GitError> {
             committed: Time(committed.trim().parse::<u64>().map_err(|_| GitError::Malformed { record: i })?),
             reverts: reverts_in(message),
             reviewers,
+            objectors: Vec::new(),
         });
     }
     Ok(commits)
@@ -215,9 +218,65 @@ pub fn import(text: &str) -> Result<Vec<Commit>, GitError> {
             committed: Time(time.parse::<u64>().map_err(|_| GitError::Malformed { record })?),
             reverts: if *reverts == "-" { Vec::new() } else { reverts.split(',').map(str::to_owned).collect() },
             reviewers: if *reviewers == "-" { Vec::new() } else { reviewers.split(',').map(|r| Name::new(r).map(ActorId)).collect::<Result<_, _>>()? },
+            objectors: Vec::new(),
         });
     }
     Ok(commits)
+}
+
+/// What a forge recorded about the review of one merged change (pseudonymised).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Review {
+    pub change: ChangeId,
+    pub approvers: Vec<ActorId>,
+    pub requested_changes: Vec<ActorId>,
+}
+
+/// Parse forge review records: one line per merged pull request,
+/// `<merge commit> <author id> <approver ids or -> <ids that requested changes or ->`.
+///
+/// # Errors
+/// If a line is malformed.
+pub fn parse_reviews(text: &str) -> Result<Vec<Review>, GitError> {
+    let ids = |s: &str| -> Result<Vec<ActorId>, NameError> {
+        if s == "-" {
+            Ok(Vec::new())
+        } else {
+            s.split(',').map(|x| Name::new(x).map(ActorId)).collect()
+        }
+    };
+    let mut out = Vec::new();
+    for (record, line) in text.lines().enumerate() {
+        let fields: Vec<&str> = line.split(' ').collect();
+        let [change, _author, approvers, objectors] = fields.as_slice() else {
+            return Err(GitError::Malformed { record });
+        };
+        out.push(Review { change: ChangeId(Name::new(change)?), approvers: ids(approvers)?, requested_changes: ids(objectors)? });
+    }
+    Ok(out)
+}
+
+/// Attach forge reviews to the commits they are about: approvers become reviewers; those who
+/// requested changes and never approved become objectors. Returns how many reviews found
+/// their commit.
+pub fn apply_reviews(commits: &mut [Commit], reviews: &[Review]) -> usize {
+    let mut matched = 0;
+    for r in reviews {
+        if let Some(c) = commits.iter_mut().find(|c| c.id == r.change) {
+            matched += 1;
+            for a in r.approvers.iter().filter(|a| **a != c.author.id) {
+                if !c.reviewers.contains(a) {
+                    c.reviewers.push(a.clone());
+                }
+            }
+            for o in r.requested_changes.iter().filter(|o| **o != c.author.id && !r.approvers.contains(o)) {
+                if !c.objectors.contains(o) {
+                    c.objectors.push(o.clone());
+                }
+            }
+        }
+    }
+    matched
 }
 
 /// Read a repository's history, oldest first.
@@ -309,6 +368,8 @@ pub struct Stats {
     /// Commits whose message records at least one reviewer other than the author and committer.
     pub reviewed: usize,
     pub reviews: usize,
+    /// Standing objections recorded by a forge (a reviewer requested changes and never approved).
+    pub objections: usize,
     /// Rule changes the reflector proposed, which the project then approved.
     pub reflector_proposals_approved: usize,
     pub reverts_declared: usize,
@@ -487,6 +548,11 @@ impl Ingest {
             self.admit(w, &Identity { id: reviewer.clone(), automated: false }, None)?;
             let _ = self.attest(w, reviewer, About::Supports(Prop::Sound(c.id.clone())), Method::Ack, &c.id)?;
             self.stats.reviews += 1;
+        }
+        for objector in &c.objectors {
+            self.admit(w, &Identity { id: objector.clone(), automated: false }, None)?;
+            let _ = self.attest(w, objector, About::Rebuts(Prop::Sound(c.id.clone())), Method::Ack, &c.id)?;
+            self.stats.objections += 1;
         }
         for written in &c.reverts {
             self.stats.reverts_declared += 1;

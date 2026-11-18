@@ -414,6 +414,7 @@ fn a_log_in_an_older_format_is_verified_from_its_bytes_and_migrated() {
     let (w, o) = rigor::scenario::run(rigor::scenario::Cast::default(), true, |_| {}).unwrap();
     save(&w, &path).unwrap();
     // Schema 1 is the same lines without the header (the format the steward's first logs were in).
+    // (Its events here are in today's vocabulary; a real change of shape is tested separately below.)
     let body: String = std::fs::read_to_string(&path).unwrap().lines().skip(1).map(|l| format!("{l}\n")).collect();
     std::fs::write(&path, &body).unwrap();
     let root = || rigor::scenario::root(rigor::scenario::Cast::default()).unwrap();
@@ -559,6 +560,7 @@ fn the_steward_keeps_an_honest_record_across_runs() {
     std::fs::write(&log, &legacy).unwrap();
     let s = Steward::open(&root, &log, 102).unwrap();
     assert_eq!(s.migrated_from, Some(1));
+    assert!(s.world.rt.log().entries().iter().any(|e| matches!(e.event, Event::Migrated { from_schema: 1, .. })));
     assert_eq!(s.commitments(Tag::Upkeep).unwrap().len(), 8);
 
     // A log that has been edited is not trusted and not deleted: it is set aside, and a new record begins.
@@ -787,4 +789,258 @@ fn a_snapshot_is_resumed_only_once_someone_trusted_has_shown_it_faithful() {
 
 fn bincode_of(s: &rigor::kernel::Snapshot) -> Vec<u8> {
     bincode::serialize(s).unwrap()
+}
+
+#[test]
+fn an_event_that_changed_shape_is_upgraded_not_lost() {
+    // A genesis exactly as schema 2 wrote it: charters had no `delegable`, norm rules had no
+    // maintenance period. It does not parse as today's event; upgraded, it does, with the
+    // meaning it had then.
+    use rigor::model::upcast;
+    use rigor::scenario::{constitution, rules};
+    let today = serde_json::to_value(Event::Genesis(Box::new(constitution(rules())))).unwrap();
+    let mut old = today.clone();
+    for charter in old.pointer_mut("/Genesis/charters").unwrap().as_array_mut().unwrap() {
+        let _ = charter.as_object_mut().unwrap().remove("delegable").unwrap();
+    }
+    let _ = old.pointer_mut("/Genesis/rules/norms").unwrap().as_object_mut().unwrap().remove("maintenance_period").unwrap();
+    assert!(serde_json::from_value::<Event>(old.clone()).is_err());
+    let upgraded: Event = serde_json::from_value(upcast(2, old.clone())).unwrap();
+    let Event::Genesis(c) = &upgraded else { panic!("not a genesis") };
+    assert!(c.charters.iter().all(|ch| !ch.delegable));
+    assert_eq!(c.rules.norms.maintenance_period, 30 * 24 * 3600);
+    // The step is the identity on what is already current, and on events it does not concern.
+    assert_eq!(upcast(2, today.clone()), today);
+    let tick = serde_json::to_value(Event::Tick(Time(7))).unwrap();
+    assert_eq!(upcast(1, tick.clone()), tick);
+}
+
+#[test]
+fn changing_the_vocabulary_without_bumping_the_schema_fails_here() {
+    // A fixed sample of events, encoded. If this digest changes, the stored form of events has
+    // changed: bump `kernel::SCHEMA`, add a step to `model::upcast`, then update this constant.
+    use rigor::scenario::{budget, constitution, pay, rules, AGENT, ALICE, DEPLOYER};
+    let sample = vec![
+        Event::Genesis(Box::new(constitution(rules()))),
+        Event::Tick(Time(1)),
+        Event::Do { act: budget(AGENT, ALICE, 50, true), cap: Some(CapId::Own(ALICE)) },
+        Event::Do { act: pay(ALICE, DEPLOYER, 5), cap: None },
+        Event::Do { act: attest(About::Supports(Prop::Fact(Name::lit("x"))), Method::Probe, "note"), cap: None },
+        Event::Do { act: Act::Admit(member(NEWCOMER)), cap: None },
+        Event::Do { act: Act::Expel { member: NEWCOMER }, cap: None },
+        Event::ArtifactChanged { artifact: rigor::model::ArtifactId::lit("a"), digest: rigor::model::ContentDigest(rigor::kernel::Digest(1)) },
+        Event::Settle,
+    ];
+    let digest = rigor::kernel::digest_of(&sample).unwrap();
+    assert_eq!((rigor::kernel::SCHEMA, digest.0), (3, SAMPLE_DIGEST), "vocabulary changed: see the comment above");
+}
+
+const SAMPLE_DIGEST: u64 = 17_928_536_702_078_334_411;
+
+// ---------------------------------------------------------------- real forge reviews
+
+#[test]
+fn real_pull_request_reviews_enter_as_evidence_for_and_against() {
+    // 935 real Kubernetes commits and the reviews GitHub recorded for 52 pull requests merged
+    // among them. An approval supports the change; a request for changes that was never
+    // followed by that reviewer's approval is standing evidence against it.
+    let mut commits = import(include_str!("data/k8s-window.txt")).unwrap();
+    let reviews = gitlog::parse_reviews(include_str!("data/k8s-reviews.txt")).unwrap();
+    assert_eq!(gitlog::apply_reviews(&mut commits, &reviews), 52);
+    let with_approval = commits.iter().filter(|c| !c.reviewers.is_empty()).count();
+    let objected: Vec<_> = commits.iter().filter(|c| !c.objectors.is_empty()).collect();
+    assert_eq!((with_approval, objected.len()), (9, 2));
+    let mut w = gitlog::found().unwrap();
+    let mut ingest = Ingest::by_the_rules();
+    for c in &commits {
+        ingest.commit(&mut w, c).unwrap();
+    }
+    assert_eq!((ingest.stats.objections, ingest.stats.denied), (2, 0));
+    assert!(ingest.stats.reviews >= 9);
+    let epi = w.epi().unwrap();
+    // An objection of the same standing as the acknowledgements leaves the change contested --
+    // or, where nobody else acknowledged it, refuted. Neither is "accepted".
+    for c in &objected {
+        assert_ne!(epi.assessment(&Prop::Sound(c.id.clone())), Assessment::Accepted, "{}", c.id);
+    }
+    let approved = commits.iter().find(|c| !c.reviewers.is_empty() && c.objectors.is_empty() && c.reverts.is_empty()).unwrap();
+    assert_eq!(epi.assessment(&Prop::Sound(approved.id.clone())), Assessment::Accepted);
+    assert!(epi.full().iter().all(|(p, st)| epi.standing(p) == *st));
+    assert!(matches!(gitlog::parse_reviews("too few"), Err(gitlog::GitError::Malformed { record: 0 })));
+}
+
+// ---------------------------------------------------------------- a real package registry
+
+#[test]
+fn a_real_registry_with_yanks_agrees_with_the_oracle() {
+    // The crates.io index records of 45 real packages (3,679 releases, 282 of them yanked).
+    // A release rests on the releases it depends on; a yank is a retraction, and whatever
+    // rested on it loses its support.
+    use rigor::registry::{conclusions as fit_now, found, ingest, oracle as fit_oracle, parse, resolve};
+    let (all, skipped) = parse(include_str!("data/crates-window.jsonl")).unwrap();
+    assert_eq!((all.len(), skipped, all.iter().filter(|p| p.yanked).count()), (3679, 200, 282));
+    let mut w = found().unwrap();
+    let stats = ingest(&mut w, &all).unwrap();
+    assert_eq!((stats.packages, stats.refused, stats.on_a_cycle), (45, 0, 0));
+    assert!(stats.dependencies_resolved > 4_000);
+    let (fit, by_status) = fit_now(&w).unwrap();
+    let expected = fit_oracle(&all);
+    assert_eq!(fit, expected);
+    // Some releases that were never yanked are nevertheless not fit: they rest on one that was.
+    let not_yanked = all.iter().filter(|p| !p.yanked).count();
+    assert_eq!((fit.len(), not_yanked - fit.len()), (3390, 7));
+    let deps = resolve(&all);
+    let fell = all.iter().find(|p| !p.yanked && !fit.contains(&p.release)).unwrap();
+    assert!(deps[&fell.release].iter().any(|d| !fit.contains(d)));
+    // The publishers' undertakings follow the assessment: satisfied where fit, open again where not.
+    assert_eq!((by_status.get(&Status::Satisfied), by_status.get(&Status::Detached)), (Some(&3390), Some(&289)));
+    let epi = w.epi().unwrap();
+    assert!(epi.full().iter().all(|(p, st)| epi.standing(p) == *st));
+    // Revision is local: the last yank re-labelled only what rested on that release.
+    assert!(epi.work.0 < 40_000, "work {} would be millions if each change re-labelled the graph", epi.work.0);
+    assert!(matches!(parse("not json"), Err(rigor::registry::RegistryError::Malformed { line: 1 })));
+}
+
+#[test]
+fn version_requirements_are_typed_and_mean_what_they_say() {
+    use rigor::registry::{Op, Requirement};
+    let req = |op, major, minor, patch| Requirement { package: Name::lit("x"), op, major, minor, patch };
+    assert!(req(Op::Caret, 1, Some(2), None).admits((1, 9, 0)) && !req(Op::Caret, 1, Some(2), None).admits((2, 0, 0)));
+    assert!(!req(Op::Caret, 1, Some(2), None).admits((1, 1, 9)));
+    assert!(req(Op::Caret, 0, Some(3), None).admits((0, 3, 7)) && !req(Op::Caret, 0, Some(3), None).admits((0, 4, 0)));
+    assert!(req(Op::Tilde, 1, Some(2), None).admits((1, 2, 9)) && !req(Op::Tilde, 1, Some(2), None).admits((1, 3, 0)));
+    assert!(req(Op::Exact, 1, Some(0), Some(229)).admits((1, 0, 229)) && !req(Op::Exact, 1, Some(0), Some(229)).admits((1, 0, 228)));
+    assert!(req(Op::AtLeast, 2, None, None).admits((5, 0, 0)) && req(Op::Any, 0, None, None).admits((0, 0, 1)));
+}
+
+// ---------------------------------------------------------------- one organisation as a member of another
+
+mod federation {
+    use super::*;
+    use rigor::actors::{service, Agent};
+    use rigor::kernel::Entity;
+    use rigor::model::{Constitution, Kind, MemberKind, Request, Task, TaskName};
+    use rigor::org::{org, standard_rules, Trusted};
+    use rigor::scenario::{budget, constitution, rules, AGENT, ALICE, DEPLOYER, MONITOR, TASK1, VENDOR};
+    use rigor::units::envoy::Envoy;
+
+    const ENVOY: ActorId = ActorId::lit("envoy");
+    const ENG: ActorId = ActorId::lit("eng");
+    const QA: ActorId = ActorId::lit("qa");
+
+    /// The scenario's world, except that the vendor is a whole organisation of its own:
+    /// an institution, an engineer, a QA service and an envoy, behind a federated boundary.
+    fn world_with_vendor_org() -> World {
+        let inner = org(vec![Box::new(Cell(Envoy::new(ENVOY, VENDOR, ENG)))]).unwrap();
+        let vendor = Entity::federated(VENDOR.0, Box::new(inner), [Kind::Tick, Kind::NormCreated].into(), [Kind::Do, Kind::Signal].into());
+        let agent: Box<dyn Unit<Event>> = Box::new(Cell(Agent::new(AGENT, DEPLOYER, rigor::model::Amount(30), false)));
+        let parts: Vec<Box<dyn Unit<Event>>> = vec![agent, Box::new(service(&DEPLOYER, false, true).unwrap()), Box::new(vendor)];
+        let mut w = World::new(Box::new(org(parts).unwrap()));
+        let _ = w.inject(&rigor::world::CONSTITUTION, Event::Genesis(Box::new(constitution(rules())))).unwrap();
+        // The vendor's own constitution: its own members, its own rules, its own trusted sources.
+        let m = |id: ActorId, kind| Member { id, kind, principal: None, role: None };
+        let inner_rules = standard_rules(&Trusted { receipts: QA, probes: QA, tests: QA, audits: QA, acks: ENVOY });
+        let inner = Constitution {
+            members: vec![m(ENVOY, MemberKind::Service), m(ENG, MemberKind::Human), m(QA, MemberKind::Service)],
+            charters: Vec::new(),
+            balances: Vec::new(),
+            rules: inner_rules,
+        };
+        w.scope = vec![VENDOR.0];
+        let _ = w.inject(&rigor::world::CONSTITUTION, Event::Genesis(Box::new(inner))).unwrap();
+        w.scope = Vec::new();
+        w
+    }
+
+    /// Run the outer story up to the point where the outer institution holds the vendor to a
+    /// remediation duty. Returns that duty's id and proposition.
+    fn until_vendor_is_liable(w: &mut World) -> (rigor::model::CommitmentId, Prop) {
+        let _ = w.act_with(&ALICE, &CapId::Own(ALICE), budget(AGENT, ALICE, 50, true)).unwrap();
+        let _ = w.act(&ALICE, Act::Request(Request { to: AGENT, task: Task::whole(TASK1), deadline: Time(5), parent: None, terms: None })).unwrap();
+        let _ = w.tick(6).unwrap();
+        let deployed = Prop::Done(Task::whole(TASK1).step(TaskName::lit("deploy")));
+        let _ = w.act(&MONITOR, attest(About::Rebuts(deployed), Method::Probe, "not there")).unwrap();
+        let duty = w.one(&VENDOR, Tag::Remediation).unwrap();
+        let Condition::Holds(p) = duty.terms().cons.clone() else { panic!("remediation is a proposition") };
+        (duty.commitment.id, p)
+    }
+
+    fn inner_commit(w: &mut World, outer_duty: rigor::model::CommitmentId, deadline: u64) {
+        let task = Envoy::task_for(outer_duty).unwrap();
+        let offer = Offer {
+            creditor: ENVOY,
+            ant: None,
+            cons: Condition::Holds(Prop::Done(task)),
+            deadline: Time(deadline),
+            tags: BTreeSet::from([Tag::Task]),
+            parent: None,
+            terms: None,
+        };
+        w.scope = vec![VENDOR.0];
+        let _ = w.act(&ENG, Act::Commit(offer)).unwrap();
+        w.scope = Vec::new();
+    }
+
+    #[test]
+    fn a_duty_laid_on_an_organisation_becomes_work_inside_it_and_its_report_is_only_a_claim() {
+        let mut w = world_with_vendor_org();
+        let (duty, remediated) = until_vendor_is_liable(&mut w);
+        // The envoy turned the outer duty into an inner request, under the inner institution.
+        let task = Envoy::task_for(duty).unwrap();
+        let asked = w.rt.log().entries().iter().any(|e| matches!(&e.event, Event::Scoped { entity, inner } if *entity == VENDOR.0 && matches!(inner.as_ref(), Event::Ok { by, act: Act::Request(r), .. } if *by == ENVOY && r.to == ENG && r.task == task)));
+        assert!(asked);
+        // Inside: the engineer undertakes it, QA (trusted inside) attests it done.
+        inner_commit(&mut w, duty, 9);
+        w.scope = vec![VENDOR.0];
+        let _ = w.act(&QA, attest(About::Supports(Prop::Done(task.clone())), Method::Test, "inner checks pass")).unwrap();
+        assert_eq!(w.one(&ENG, Tag::Task).unwrap().status, Some(Status::Satisfied));
+        assert_eq!(w.epi().unwrap().assessment(&Prop::Done(task.clone())), Assessment::Accepted);
+        w.scope = Vec::new();
+        // Outside: the organisation (one actor) has CLAIMED the duty done, and signalled so.
+        let claimed =
+            w.rt.log()
+                .entries()
+                .iter()
+                .any(|e| e.actor.only() == Some(&VENDOR.0) && matches!(&e.event, Event::Do { act: Act::Claim { prop }, .. } if *prop == remediated));
+        assert!(claimed);
+        // The claim is not evidence: inner evidence did not cross the boundary, and the outer
+        // institution knows nothing of the inner task. The outer duty is still open.
+        assert_eq!(w.epi().unwrap().assessment(&remediated), Assessment::Unsupported);
+        assert_eq!(w.epi().unwrap().assessment(&Prop::Done(task)), Assessment::Unsupported);
+        assert_eq!(w.norms().unwrap().status(&duty), Some(Status::Detached));
+        // The outer institution's own trusted source settles it.
+        let _ = w.act(&MONITOR, attest(About::Supports(remediated), Method::Probe, "v2 live")).unwrap();
+        assert_eq!(w.norms().unwrap().status(&duty), Some(Status::Satisfied));
+        // Outside, nobody inside the vendor is a member: its engineer cannot act there.
+        assert_eq!(denial(&w.act(&ENG, Act::Claim { prop: Prop::Fact(Name::lit("x")) }).unwrap()), Some(DenyReason::NotAMember));
+        assert!(w.rt.log().verify().is_ok());
+    }
+
+    #[test]
+    fn each_institution_judges_at_its_own_level_when_the_inner_work_fails() {
+        let mut w = world_with_vendor_org();
+        let (duty, remediated) = until_vendor_is_liable(&mut w);
+        inner_commit(&mut w, duty, 8);
+        // Nobody delivers. The outer clock is the inner clock (the envoy relays it).
+        let _ = w.tick(9).unwrap();
+        w.scope = vec![VENDOR.0];
+        let inner_duty = w.one(&ENG, Tag::Task).unwrap().commitment.id;
+        assert_eq!(w.norms().unwrap().status(&inner_duty), Some(Status::Violated));
+        // Inside, the engineer is found accountable -- by the inner institution's rules.
+        assert!(w.adj().unwrap().findings(&inner_duty).contains(&(Finding::Accountable, ENG)));
+        w.scope = Vec::new();
+        // The envoy reported the failure outward, honestly, and did not claim success.
+        let reported =
+            w.rt.log().entries().iter().any(|e| {
+                e.actor.only() == Some(&VENDOR.0) && matches!(&e.event, Event::Signal { to, prop, value: false } if *to == ALICE && *prop == remediated)
+            });
+        let claimed = w.rt.log().entries().iter().any(|e| matches!(&e.event, Event::Do { act: Act::Claim { prop }, .. } if *prop == remediated));
+        assert!(reported && !claimed);
+        // Outside, when the outer deadline passes, the ORGANISATION is accountable: the outer
+        // institution neither sees nor judges the engineer.
+        let _ = w.tick(12).unwrap();
+        assert_eq!(w.norms().unwrap().status(&duty), Some(Status::Violated));
+        let outer = w.adj().unwrap().findings(&duty);
+        assert!(outer.contains(&(Finding::Accountable, VENDOR)) && !outer.iter().any(|(_, who)| *who == ENG));
+    }
 }

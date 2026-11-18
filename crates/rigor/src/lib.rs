@@ -62,6 +62,7 @@ pub mod kernel;
 pub mod logic;
 pub mod model;
 pub mod org;
+pub mod registry;
 pub mod scenario;
 pub mod steward;
 pub mod synth;
