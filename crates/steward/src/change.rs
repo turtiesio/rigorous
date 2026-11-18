@@ -92,6 +92,23 @@ fn permitted(root: &Path, f: &NewFile) -> Result<(), Refusal> {
     Ok(())
 }
 
+/// A request's identity: the digest of everything about it.
+fn identity(request: &ChangeRequest) -> Result<ChangeId, StewardError> {
+    let digest = digest_of(request).map_err(|e| StewardError::Adapter(AdapterError::Snapshot(e)))?;
+    Ok(ChangeId(Name::new(&format!("{:016x}", digest.0))?))
+}
+
+/// Run the project's own checks in a directory. One result per check that was run.
+fn run_checks(root: &Path, dir: &Path) -> Result<Vec<(Check, bool)>, StewardError> {
+    let mut out = Vec::new();
+    for check in Check::ALL {
+        let mut command = check.command(dir);
+        let _ = command.env("CARGO_TARGET_DIR", root.join("target").join("sandbox"));
+        out.push((check, command.output().map_err(AdapterError::Io)?.status.success()));
+    }
+    Ok(out)
+}
+
 impl Steward {
     fn changes_dir(&self) -> PathBuf {
         self.home().join("changes")
@@ -103,7 +120,14 @@ impl Steward {
     /// If it cannot be read.
     pub fn change(&self, id: &ChangeId) -> Result<ChangeRequest, StewardError> {
         let text = std::fs::read_to_string(self.changes_dir().join(format!("{id}.json"))).map_err(AdapterError::Io)?;
-        serde_json::from_str(&text).map_err(|e| StewardError::Adapter(AdapterError::Snapshot(rigor_kernel::EncodingError(e.to_string()))))
+        let request: ChangeRequest =
+            serde_json::from_str(&text).map_err(|e| StewardError::Adapter(AdapterError::Snapshot(rigor_kernel::EncodingError(e.to_string()))))?;
+        // What was verified and approved is identified by its content. A stored request that
+        // no longer matches its identity has been altered since, and is not that request.
+        if identity(&request)? != *id {
+            return Err(StewardError::ChangeAltered(id.clone()));
+        }
+        Ok(request)
     }
 
     /// Record a change request. Returns its identity, or why it is not acceptable.
@@ -119,8 +143,7 @@ impl Steward {
                 return Ok(Err(r));
             }
         }
-        let digest = digest_of(&(&request.title, &request.files)).map_err(|e| StewardError::Adapter(AdapterError::Snapshot(e)))?;
-        let id = ChangeId(Name::new(&format!("{:016x}", digest.0))?);
+        let id = identity(request)?;
         std::fs::create_dir_all(self.changes_dir()).map_err(AdapterError::Io)?;
         let text =
             serde_json::to_string_pretty(request).map_err(|e| StewardError::Adapter(AdapterError::Snapshot(rigor_kernel::EncodingError(e.to_string()))))?;
@@ -153,7 +176,18 @@ impl Steward {
     ///
     /// # Errors
     /// On I/O failure or a kernel fault.
-    pub fn verify(&mut self, id: &ChangeId, skip: &BTreeSet<Check>) -> Result<bool, StewardError> {
+    pub fn verify(&mut self, id: &ChangeId) -> Result<bool, StewardError> {
+        let root = self.root().to_path_buf();
+        self.verify_with(id, |sandbox| run_checks(&root, sandbox))
+    }
+
+    /// As [`Self::verify`], with the checks supplied by the caller (they are given the sandbox
+    /// directory). Verification counts only if EVERY one of the project's checks was run:
+    /// a check that was not run establishes nothing, so nothing is attested.
+    ///
+    /// # Errors
+    /// On I/O failure or a kernel fault.
+    pub fn verify_with(&mut self, id: &ChangeId, checks: impl FnOnce(&Path) -> Result<Vec<(Check, bool)>, StewardError>) -> Result<bool, StewardError> {
         let request = self.change(id)?;
         let sandbox = self.home().join("sandbox");
         let _ = std::fs::remove_dir_all(&sandbox);
@@ -174,19 +208,17 @@ impl Steward {
             }
             std::fs::write(to, &f.content).map_err(AdapterError::Io)?;
         }
-        let mut passed = true;
-        let mut ran = Vec::new();
-        for check in Check::ALL.into_iter().filter(|c| !skip.contains(c)) {
-            let mut command = check.command(&sandbox);
-            let _ = command.env("CARGO_TARGET_DIR", self.root().join("target").join("sandbox"));
-            let ok = command.output().map_err(AdapterError::Io)?.status.success();
-            ran.push(format!("{}={}", check.requirement(), if ok { "passed" } else { "FAILED" }));
-            passed = passed && ok;
+        let results = checks(&sandbox)?;
+        let _ = std::fs::remove_dir_all(&sandbox);
+        let ran: BTreeSet<Check> = results.iter().map(|(c, _)| *c).collect();
+        if Check::ALL.iter().any(|c| !ran.contains(c)) {
+            return Ok(false);
         }
+        let passed = results.iter().all(|(_, ok)| *ok);
+        let summary: Vec<String> = results.iter().map(|(c, ok)| format!("{}={}", c.requirement(), if *ok { "passed" } else { "FAILED" })).collect();
         let prop = Prop::Sound(id.clone());
         let about = if passed { About::Supports(prop) } else { About::Rebuts(prop) };
-        let _ = self.world.act(&CI, attest(about, Method::Test, &format!("sandbox verification: {}", ran.join(", "))))?;
-        let _ = std::fs::remove_dir_all(&sandbox);
+        let _ = self.world.act(&CI, attest(about, Method::Test, &format!("sandbox verification: {}", summary.join(", "))))?;
         self.persist()?;
         Ok(passed)
     }
@@ -243,8 +275,13 @@ impl Steward {
     pub fn progress(&self, id: &ChangeId) -> Result<Progress, StewardError> {
         let request = self.change(id)?;
         let epi = self.world.epi()?;
-        let standing = epi.standing(&Prop::Sound(id.clone()));
-        let basis: Vec<_> = epi.evidence().filter(|e| standing.basis.contains(&e.id)).collect();
+        let sound = Prop::Sound(id.clone());
+        let standing = epi.standing(&sound);
+        let on_it = epi.evidence_on(&sound);
+        let evidence: Vec<_> = epi.evidence().filter(|e| on_it.contains(&e.id)).collect();
+        let by = |who: &ActorId, method: Method, supports: bool| {
+            evidence.iter().any(|e| e.source == *who && e.method == method && matches!(e.about, About::Supports(_)) == supports)
+        };
         let applied = epi.assessment(&Prop::Applied(id.clone())) == Assessment::Accepted;
         let mut missing = Vec::new();
         if applied {
@@ -253,10 +290,12 @@ impl Steward {
         if standing.assessment != Assessment::Accepted {
             missing.push(Missing::AssessedSound);
         }
-        if !basis.iter().any(|e| e.source == CI && e.method == Method::Test) {
+        // A verification that failed is never outweighed: not by a later pass, not by approval.
+        if !by(&CI, Method::Test, true) || by(&CI, Method::Test, false) {
             missing.push(Missing::PassingVerification);
         }
-        if !basis.iter().any(|e| e.source == OWNER && e.method == Method::Audit) {
+        // Nor is a rejection by the owner outweighed by a later approval.
+        if !by(&OWNER, Method::Audit, true) || by(&OWNER, Method::Audit, false) {
             missing.push(Missing::OwnersApproval);
         }
         Ok(Progress { id: id.clone(), title: request.title, proposed_by: request.proposed_by, assessment: standing.assessment, missing, applied })

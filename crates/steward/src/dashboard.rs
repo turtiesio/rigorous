@@ -56,8 +56,13 @@ impl Steward {
         );
 
         // 1. What needs the owner.
-        let changes: Vec<Progress> = self.change_ids()?.iter().filter_map(|id| self.progress(id).ok()).collect();
+        let ids = self.change_ids()?;
+        let changes: Vec<Progress> = ids.iter().filter_map(|id| self.progress(id).ok()).collect();
+        let unreadable: Vec<_> = ids.iter().filter(|id| self.progress(id).is_err()).collect();
         let mut asks: Vec<String> = Vec::new();
+        for id in &unreadable {
+            asks.push(format!("The stored change request <code>{id}</code> does not match the identity it was recorded under (altered, or written by an older version). It cannot be verified or applied."));
+        }
         for c in changes.iter().filter(|c| !c.applied && c.missing == vec![Missing::OwnersApproval]) {
             asks.push(format!("Approve or reject the change <b>{}</b> (<code>{}</code>): it is verified and waits only for you.", esc(&c.title), c.id));
         }

@@ -78,7 +78,7 @@ impl Steward {
         Ok(self.pay(reply.micro_usd.max(1))?.then_some(reply.text))
     }
 
-    /// Research one question: draft, review, and at most one revision.
+    /// Research one question: draft, review, and at most two revisions.
     ///
     /// # Errors
     /// On a gateway failure, I/O failure or a kernel fault.
@@ -91,7 +91,7 @@ impl Steward {
         std::fs::create_dir_all(&dir).map_err(rigor_adapter_host::AdapterError::Io)?;
         let context = format!("QUESTION\n{}\n\nTHE SYSTEM'S OWN ACCOUNT OF ITSELF (for context)\n{}", q.text, about_itself.describe());
         let mut objections = String::new();
-        for round in 1..=2u8 {
+        for round in 1..=3u8 {
             let prompt = if objections.is_empty() {
                 context.clone()
             } else {
@@ -140,6 +140,6 @@ impl Steward {
             objections = review;
         }
         self.persist()?;
-        Ok(Outcome::NotAccepted { rounds: 2 })
+        Ok(Outcome::NotAccepted { rounds: 3 })
     }
 }

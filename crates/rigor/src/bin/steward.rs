@@ -200,7 +200,7 @@ fn main() -> Result<ExitCode, StewardError> {
             match steward.propose(&request)? {
                 Ok(id) => {
                     println!("\nCHANGE {id} proposed: {}", request.title);
-                    println!("  sandbox verification: {}", if steward.verify(&id, &skip)? { "passed" } else { "FAILED" });
+                    println!("  sandbox verification: {}", if steward.verify(&id)? { "passed" } else { "FAILED" });
                     match steward.review_change(&gateway, &id)? {
                         Some(true) => println!("  reviewer: acknowledged"),
                         Some(false) => println!("  reviewer: OBJECTS (see .rigor/changes/{id}.review.md)"),

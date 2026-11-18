@@ -140,6 +140,8 @@ pub enum StewardError {
     Mind(rigor_mind::MindError),
     /// A name the system built at run time was not a valid name.
     Name(rigor_kernel::NameError),
+    /// A stored change request no longer matches the identity it was verified and approved under.
+    ChangeAltered(rigor_institution::model::ChangeId),
 }
 
 impl From<rigor_mind::MindError> for StewardError {
