@@ -12,6 +12,7 @@ rigor-adapter-host = { path = "../adapters/host" }
 rigor-adapter-git = { path = "../adapters/git" }
 rigor-adapter-chain = { path = "../adapters/chain" }
 rigor-adapter-registry = { path = "../adapters/registry" }
+rigor-adapter-forge = { path = "../adapters/forge" }
 rigor-demo = { path = "../demo" }
 rigor-steward = { path = "../steward" }
 rigor-mind = { path = "../mind" }

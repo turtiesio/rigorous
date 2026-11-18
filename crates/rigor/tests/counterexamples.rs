@@ -110,6 +110,9 @@ impl Unit<Event> for Rtc {
     fn spies(&self) -> Vec<Name> {
         Vec::new()
     }
+    fn forgers(&self) -> Vec<Name> {
+        Vec::new()
+    }
     fn step(&mut self, env: &Envelope<'_, Event>) -> Result<Vec<Emit<Event>>, Fault> {
         let mut out = self.0.step(env)?;
         let mut q: VecDeque<Emit<Event>> = out.iter().cloned().collect();

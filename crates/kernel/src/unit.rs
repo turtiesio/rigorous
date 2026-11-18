@@ -34,6 +34,9 @@ pub trait Payload: Clone + Debug + serde::Serialize + 'static {
     fn foreign_kind() -> Self::Kind;
     /// If this event is addressed to the world outside a federated boundary, what it carries.
     fn as_abroad(&self) -> Option<&Self>;
+    /// Whether an event of this kind may arrive from outside the system at all. Everything else
+    /// can only ever be produced by a unit: the runtime refuses it as a stimulus.
+    fn may_come_from_outside(&self) -> bool;
 }
 
 /// From whose point of view an actor is named.
@@ -92,6 +95,10 @@ pub enum Fault<K, F> {
     DuplicateName(Name),
     /// A non-boundary unit declared that it listens to scoped (internal) events.
     ListensInsideBoundary(Name),
+    /// A non-boundary unit declared that it emits scoped (internal) events: only a boundary may.
+    EmitsInsideBoundary(Name),
+    /// An event of a kind only units may produce was offered as an external stimulus.
+    NotAStimulus(K),
     /// The cascade did not reach quiescence within the fuel bound.
     Divergence {
         fuel: u64,
@@ -145,6 +152,8 @@ pub trait Unit<E: Payload>: Debug {
     }
     /// Units at this level (through transparent `Par`s) that listen to scoped events without being a boundary.
     fn spies(&self) -> Vec<Name>;
+    /// Units at this level that declare they emit scoped events without being a boundary.
+    fn forgers(&self) -> Vec<Name>;
     /// # Errors
     /// See [`Fault`].
     fn step(&mut self, env: &Envelope<'_, E>) -> Result<Vec<Emit<E>>, FaultOf<E>>;
@@ -180,6 +189,13 @@ impl<E: Payload, L: Leaf<E>> Unit<E> for Cell<L> {
     }
     fn spies(&self) -> Vec<Name> {
         if self.0.inputs().contains(&E::scoped_kind()) {
+            vec![self.0.name()]
+        } else {
+            Vec::new()
+        }
+    }
+    fn forgers(&self) -> Vec<Name> {
+        if self.0.outputs().contains(&E::scoped_kind()) {
             vec![self.0.name()]
         } else {
             Vec::new()
@@ -251,6 +267,9 @@ impl<E: Payload> Par<E> {
             if let Some(spy) = u.spies().into_iter().next() {
                 return Err(Fault::ListensInsideBoundary(spy));
             }
+            if let Some(forger) = u.forgers().into_iter().next() {
+                return Err(Fault::EmitsInsideBoundary(forger));
+            }
         }
         let anon = Name::lit("par");
         let mut owner: Vec<(E::Kind, Name)> = Vec::new();
@@ -282,6 +301,9 @@ impl<E: Payload> Unit<E> for Par<E> {
     }
     fn spies(&self) -> Vec<Name> {
         self.parts.iter().flat_map(|(_, u)| u.spies()).collect()
+    }
+    fn forgers(&self) -> Vec<Name> {
+        self.parts.iter().flat_map(|(_, u)| u.forgers()).collect()
     }
     fn step(&mut self, env: &Envelope<'_, E>) -> Result<Vec<Emit<E>>, FaultOf<E>> {
         let kind = env.event.kind();
@@ -372,6 +394,9 @@ impl<E: Payload> Unit<E> for Entity<E> {
     fn spies(&self) -> Vec<Name> {
         Vec::new()
     }
+    fn forgers(&self) -> Vec<Name> {
+        Vec::new()
+    }
     fn step(&mut self, env: &Envelope<'_, E>) -> Result<Vec<Emit<E>>, FaultOf<E>> {
         let outer = |w: &Who| match w {
             Who::Here(p) | Who::Outer(p) => Who::Outer(p.clone()),
@@ -379,11 +404,16 @@ impl<E: Payload> Unit<E> for Entity<E> {
         let wrapped;
         let (event, who) = match env.event.as_scoped() {
             Some((entity, inner)) if *entity == self.name => {
-                let who = match &env.who {
-                    Who::Here(p) => p.strip(&self.name).map_or_else(|| Who::Outer(p.clone()), Who::Here),
-                    Who::Outer(p) => Who::Outer(p.clone()),
-                };
-                (inner, who)
+                // An internal event is one that came from inside: its actor is named under this
+                // boundary. A scoped event carrying this entity's name but coming from anywhere
+                // else is a forgery and is dropped.
+                match &env.who {
+                    Who::Here(p) => match p.strip(&self.name) {
+                        Some(rest) => (inner, Who::Here(rest)),
+                        None => return Ok(Vec::new()),
+                    },
+                    Who::Outer(_) => return Ok(Vec::new()),
+                }
             }
             Some(_) => return Ok(Vec::new()),
             None if env.event.kind() == E::settle_kind() => (env.event, env.who.clone()),

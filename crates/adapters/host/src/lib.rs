@@ -50,7 +50,8 @@ pub struct ArtifactWatcher {
     seen: BTreeMap<ArtifactId, ContentDigest>,
 }
 
-/// Every file under `dir` (recursively) whose extension is one of `extensions`, sorted.
+/// Every file under `dir` (recursively) whose extension is one of `extensions` (every file, if
+/// none are given), sorted.
 ///
 /// # Errors
 /// If a directory cannot be read.
@@ -62,7 +63,7 @@ pub fn files_under(dir: &Path, extensions: &[&str]) -> Result<Vec<PathBuf>, Adap
             let path = entry.map_err(AdapterError::Io)?.path();
             if path.is_dir() {
                 stack.push(path);
-            } else if path.extension().and_then(|e| e.to_str()).is_some_and(|e| extensions.contains(&e)) {
+            } else if extensions.is_empty() || path.extension().and_then(|e| e.to_str()).is_some_and(|e| extensions.contains(&e)) {
                 out.push(path);
             }
         }
@@ -230,6 +231,16 @@ pub fn resume(root: Box<dyn Unit<Event>>, path: &Path) -> Result<World, AdapterE
     Ok(World { rt: Runtime::resume(root, &snap).map_err(AdapterError::Snapshot)?, scope: Vec::new() })
 }
 
+/// The proposition "this snapshot is faithful". It names the WHOLE snapshot: its position in
+/// the log, the chain head there, and its state. Re-pointing an audited state at another
+/// position makes it a different snapshot, which nobody has attested.
+///
+/// # Errors
+/// If the snapshot's identity cannot be encoded.
+pub fn faithful(snap: &Snapshot) -> Result<Prop, AdapterError> {
+    Ok(Prop::Faithful(ContentDigest(rigor_kernel::digest_of(&(snap.seq, snap.head, snap.digest)).map_err(AdapterError::Snapshot)?)))
+}
+
 /// Audit a snapshot: replay the world's own history up to the snapshot's position into a fresh
 /// root and compare. The auditor then ATTESTS the result as evidence about the proposition
 /// "this snapshot is faithful", which the institution assesses like any other claim.
@@ -245,8 +256,8 @@ pub fn audit_snapshot(w: &mut World, root: Box<dyn Unit<Event>>, snap: &Snapshot
     let stimuli: Vec<_> =
         entries.iter().filter(|e| e.seq < snap.seq && e.cause.is_none() && e.event != Event::Settle).map(|e| (e.actor.clone(), e.event.clone())).collect();
     let replayed = Runtime::replay(root, &stimuli).map_err(|f| AdapterError::World(Error::Fault(f)))?;
+    let prop = faithful(snap)?;
     let faithful = replayed.snapshot().map_err(AdapterError::Snapshot)? == *snap;
-    let prop = Prop::Faithful(ContentDigest(snap.digest));
     let attestation = Attestation {
         about: if faithful { About::Supports(prop) } else { About::Rebuts(prop) },
         method: Method::Audit,
@@ -265,7 +276,7 @@ pub fn audit_snapshot(w: &mut World, root: Box<dyn Unit<Event>>, snap: &Snapshot
 pub fn resume_attested(root: Box<dyn Unit<Event>>, path: &Path, evidence: &World) -> Result<World, AdapterError> {
     let bytes = std::fs::read(path).map_err(AdapterError::Io)?;
     let snap: Snapshot = bincode::deserialize(&bytes).map_err(|e| AdapterError::Snapshot(rigor_kernel::EncodingError(e.to_string())))?;
-    if evidence.epi()?.assessment(&Prop::Faithful(ContentDigest(snap.digest))) != rigor_institution::model::Assessment::Accepted {
+    if evidence.epi()?.assessment(&faithful(&snap)?) != rigor_institution::model::Assessment::Accepted {
         return Err(AdapterError::SnapshotNotAttested);
     }
     Ok(World { rt: Runtime::resume(root, &snap).map_err(AdapterError::Snapshot)?, scope: Vec::new() })

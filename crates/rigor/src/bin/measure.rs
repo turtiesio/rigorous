@@ -206,7 +206,7 @@ fn main() -> Result<(), Failed> {
             let p = fact(&format!("p{i}"))?;
             let offer =
                 Offer { creditor: ALICE, ant: None, cons: Condition::Holds(p.clone()), deadline: Time(2), tags: BTreeSet::new(), parent: None, terms: None };
-            let _ = rt.inject(&env, Event::Ok { by: d.clone(), via: CapId::Base(d.clone()), act: Act::Commit(offer) })?;
+            let _ = rt.inject_unchecked(rigor::kernel::Path::of(&env), Event::Ok { by: d.clone(), via: CapId::Base(d.clone()), act: Act::Commit(offer) })?;
             for (assessment, since) in [(Assessment::Accepted, Some(Time(1))), (Assessment::Refuted, None)] {
                 alphabet.push((
                     env.clone(),

@@ -38,8 +38,14 @@ pub struct Adjudicator {
     members: BTreeMap<ActorId, Member>,
     c: BTreeMap<CommitmentId, Known>,
     kids: BTreeMap<CommitmentId, BTreeSet<CommitmentId>>,
-    claims: BTreeMap<Prop, BTreeSet<ActorId>>,
-    notified: BTreeMap<Prop, BTreeMap<ActorId, bool>>,
+    /// Who claimed what, as the ordinal of that claim among the claimant's own claims.
+    claims: BTreeMap<Prop, BTreeMap<ActorId, u64>>,
+    /// Who was told what, by a party entitled to tell them, and how many claims the recipient
+    /// had made by then. (Order is kept per actor, not as a global count: events that concern
+    /// different actors must not change each other's record.) The first telling stands.
+    notified: BTreeMap<Prop, BTreeMap<ActorId, (bool, u64)>>,
+    /// How many claims each actor has made.
+    claimed_so_far: BTreeMap<ActorId, u64>,
     prop: BTreeMap<Prop, Assessment>,
     by_prop: BTreeMap<Prop, BTreeSet<CommitmentId>>,
     verdicts: BTreeMap<CommitmentId, Findings>,
@@ -61,6 +67,7 @@ impl Default for Adjudicator {
             kids: BTreeMap::new(),
             claims: BTreeMap::new(),
             notified: BTreeMap::new(),
+            claimed_so_far: BTreeMap::new(),
             prop: BTreeMap::new(),
             by_prop: BTreeMap::new(),
             verdicts: BTreeMap::new(),
@@ -111,25 +118,10 @@ impl Adjudicator {
 
     fn facts(&self, fam: &BTreeSet<CommitmentId>) -> Vec<RFact> {
         let mut f = Vec::new();
-        // Only the actors this family mentions, and their principals: the cost of judging a
-        // family must not depend on how many members the institution has.
-        let mut actors: BTreeSet<&ActorId> = BTreeSet::new();
-        for k in fam.iter().filter_map(|id| self.c.get(id)) {
-            actors.extend([&k.debtor, &k.creditor]);
-            if let Some(p) = &k.prop {
-                actors.extend(self.claims.get(p).into_iter().flatten());
-                actors.extend(self.notified.get(p).into_iter().flat_map(BTreeMap::keys));
-            }
-        }
-        let mut pending: Vec<&ActorId> = actors.iter().copied().collect();
-        while let Some(a) = pending.pop() {
-            if let Some(p) = self.members.get(a).and_then(|m| m.principal.as_ref()) {
-                if actors.insert(p) {
-                    pending.push(p);
-                }
-            }
-        }
-        for m in actors.into_iter().filter_map(|a| self.members.get(a)) {
+        // Every member's attributes: a rule may speak of any member by kind or role, not only of
+        // those the family happens to mention. (Cost is paid only when there is something to
+        // judge: see `adjudicate`.)
+        for m in self.members.values() {
             let a = || Const::Actor(m.id.clone());
             f.push(fact(Pred::Kind, [a(), Const::Kind(m.kind)]));
             if let Some(p) = &m.principal {
@@ -156,11 +148,24 @@ impl Adjudicator {
                 f.push(fact(Pred::Cons, [c(), pc()]));
                 let a = self.prop.get(p).copied().unwrap_or(Assessment::Unsupported);
                 f.push(fact(Pred::Assessed, [pc(), Const::Assessment(a)]));
-                for x in self.claims.get(p).into_iter().flatten() {
+                for x in self.claims.get(p).into_iter().flatten().map(|(x, _)| x) {
                     f.push(fact(Pred::Claimed, [Const::Actor(x.clone()), pc()]));
                 }
-                for (x, v) in self.notified.get(p).into_iter().flatten() {
-                    f.push(fact(Pred::Notified, [Const::Actor(x.clone()), pc(), Const::Bool(*v)]));
+                for (x, (v, told)) in self.notified.get(p).into_iter().flatten() {
+                    // Being told counts against someone only if it came BEFORE they made any
+                    // claim in this family: what one learns after speaking does not make the
+                    // earlier statement a knowing one.
+                    let first_claim = fam
+                        .iter()
+                        .filter_map(|c| self.c.get(c))
+                        .filter_map(|k| k.prop.as_ref())
+                        .filter_map(|q| self.claims.get(q).and_then(|m| m.get(x)))
+                        .min();
+                    // `told` is how many claims they had made when told; a claim's ordinal is its
+                    // position among their claims. Told before the claim: told < ordinal.
+                    if first_claim.is_none_or(|ordinal| told < ordinal) {
+                        f.push(fact(Pred::Notified, [Const::Actor(x.clone()), pc(), Const::Bool(*v)]));
+                    }
                 }
             }
         }
@@ -271,7 +276,12 @@ impl Leaf<Event> for Adjudicator {
                 let _ = self.dirty.insert(root);
             }
             Event::Ok { by, act: Act::Claim { prop }, .. } => {
-                let _ = self.claims.entry(prop.clone()).or_default().insert(by.clone());
+                if !self.claims.get(prop).is_some_and(|m| m.contains_key(by)) {
+                    let n = self.claimed_so_far.entry(by.clone()).or_default();
+                    *n += 1;
+                    let ordinal = *n;
+                    let _ = self.claims.entry(prop.clone()).or_default().insert(by.clone(), ordinal);
+                }
                 self.touch_prop(prop);
             }
             Event::Assessed { prop, assessment, .. } => {
@@ -279,8 +289,17 @@ impl Leaf<Event> for Adjudicator {
                 self.touch_prop(prop);
             }
             Event::Signal { to, prop, value } => {
-                let _ = self.notified.entry(prop.clone()).or_default().insert(to.clone(), *value);
-                self.touch_prop(prop);
+                // A message counts as notice only from a party answerable for the proposition:
+                // the debtor of a commitment it would discharge. The kernel says who sent it.
+                // The first such notice stands; nobody else's later word replaces it.
+                let sender = env.who.local().map(|n| ActorId(n.clone()));
+                let entitled =
+                    sender.as_ref().is_some_and(|s| self.by_prop.get(prop).into_iter().flatten().filter_map(|c| self.c.get(c)).any(|k| k.debtor == *s));
+                if entitled {
+                    let so_far = self.claimed_so_far.get(to).copied().unwrap_or(0);
+                    let _ = self.notified.entry(prop.clone()).or_default().entry(to.clone()).or_insert((*value, so_far));
+                    self.touch_prop(prop);
+                }
             }
             Event::Settle => {
                 // Judge only quiescent states: never a half-propagated one.

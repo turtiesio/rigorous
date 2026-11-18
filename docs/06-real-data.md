@@ -172,6 +172,33 @@ approval is supporting evidence, a request for changes never followed by that re
 evidence against. Of the 52, 9 carried an approval through the review API and 2 a standing objection; the
 rest were approved by comment commands, which this adapter does not read. It is a real sample, not a survey.
 
+## Part 4a: a forge's public event archive, at scale
+
+The owner decided against using their forge credential, so review data at scale was taken from GitHub's
+public event archive instead: 169 hourly files covering 9-15 November 2026 (the archive is a sample of all
+activity, and its events are trimmed). People and repositories are pseudonymised.
+
+**The mapping** (`crates/adapters/forge`). Opening a pull request: the author undertakes that the change will
+be found sound, and claims it. An approving review supports that; a review requesting changes rebuts it. A
+reviewer's later review **withdraws** their earlier one, and a dismissal withdraws it too: real retraction.
+A merge is the forge's own record that the change was applied.
+
+| | |
+|---|---|
+| Happenings read | 212,434 |
+| People admitted at run time | 68,522 |
+| Pull requests opened | 105,653 |
+| Approvals / change requests / dismissals | 12,676 / 2,173 / 1,581 |
+| Earlier reviews withdrawn (superseded or dismissed) | 743 |
+| Events recorded | 1,976,364 (ingested in 21.5 s; peak memory 0.72 GB with compaction) |
+| Acts the institution refused | **0** |
+| Reviewed changes | 15,419: accepted 12,035; refuted 2,017; unsupported 1,356; contested 11 |
+| Every assessment equals an independent oracle (each reviewer's latest review counts; a dismissal removes it; the author's own approval counts for nothing) | holds |
+| Incremental assessment equals from-scratch | 103,317 propositions |
+
+Of 89,222 merges in the window, 89,101 had no approval standing on record *in the window*. That says almost
+nothing about review practice: the archive is a sample, so a merge and its review are rarely both in it.
+
 ## Part 5: two organisations that actually interact
 
 On real data the nested organisations only ran side by side. Interaction across a boundary is shown on the

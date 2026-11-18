@@ -11,6 +11,8 @@ use rigor_kernel::{Entry, NameError};
 
 pub const BOSS: ActorId = ActorId::lit("boss");
 pub const WORKER: ActorId = ActorId::lit("w");
+/// A second worker: each link of a chain is taken on by a different party from the one above it.
+pub const OTHER: ActorId = ActorId::lit("x");
 pub const DEPLOYER: ActorId = ActorId::lit("deployer");
 pub const MONITOR: ActorId = ActorId::lit("monitor");
 pub const AUDITOR: ActorId = ActorId::lit("auditor");
@@ -50,6 +52,7 @@ pub fn world_n(n: usize, chain: usize) -> Result<World, SynthError> {
         members: vec![
             m(BOSS, MemberKind::Human, None),
             m(WORKER, MemberKind::Human, None),
+            m(OTHER, MemberKind::Human, None),
             m(DEPLOYER, MemberKind::Service, None),
             m(MONITOR, MemberKind::Service, None),
             m(AUDITOR, MemberKind::Human, Some(Role::Auditor)),
@@ -64,8 +67,14 @@ pub fn world_n(n: usize, chain: usize) -> Result<World, SynthError> {
         let mut parent: Option<CommitmentId> = None;
         for d in 0..chain {
             let p = link(i, d).map_err(SynthError::Name)?;
+            // A link is owed to whoever owes the link above it, by the other worker.
+            let (debtor, creditor) = match (d, d % 2) {
+                (0, _) => (WORKER, BOSS),
+                (_, 1) => (OTHER, WORKER),
+                (_, _) => (WORKER, OTHER),
+            };
             let offer = Offer {
-                creditor: BOSS,
+                creditor,
                 ant: None,
                 cons: Condition::Holds(p.clone()),
                 deadline: Time(5),
@@ -73,12 +82,12 @@ pub fn world_n(n: usize, chain: usize) -> Result<World, SynthError> {
                 parent,
                 terms: None,
             };
-            parent = w.act(&WORKER, Act::Commit(offer))?.iter().find_map(|e| match &e.event {
+            parent = w.act(&debtor, Act::Commit(offer))?.iter().find_map(|e| match &e.event {
                 Event::NormCreated(c) => Some(c.id),
                 _ => None,
             });
             let _ = w.act(&DEPLOYER, attest(About::Supports(p.clone()), Method::Receipt, "receipt"))?;
-            let _ = w.act(&WORKER, Act::Claim { prop: p })?;
+            let _ = w.act(&debtor, Act::Claim { prop: p })?;
         }
     }
     let _ = w.tick(6)?;

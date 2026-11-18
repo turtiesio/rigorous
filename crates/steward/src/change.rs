@@ -12,8 +12,11 @@
 //! 5. APPLIED only if it is assessed sound AND that assessment rests on both a passing
 //!    verification and the owner's approval.
 //!
-//! In this version a change may only ADD files inside permitted places. Editing or deleting
-//! existing files is not built, and the system says so in its account of itself.
+//! A change may add files, or replace the content of an existing file, inside permitted places
+//! only (research notes and generated tests; never the code or proofs the system is trusted
+//! for). An edit names the content it replaces: it applies to exactly that content or not at
+//! all. Deleting files, and editing outside those places, are not built, and the system says
+//! so in its account of itself.
 
 use crate::{Check, Steward, StewardError, CI, OWNER, REVIEWER};
 use rigor_adapter_host::AdapterError;
@@ -34,6 +37,17 @@ pub struct NewFile {
     pub content: String,
 }
 
+/// A replacement of an existing file's content.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Edit {
+    /// Path relative to the repository root.
+    pub path: String,
+    /// Digest of the content the edit was written against. The edit applies only to exactly
+    /// that content: if the file has changed since, the request is stale and is refused.
+    pub was: ContentDigest,
+    pub content: String,
+}
+
 /// A requested change.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChangeRequest {
@@ -41,6 +55,8 @@ pub struct ChangeRequest {
     pub reason: String,
     pub proposed_by: ActorId,
     pub files: Vec<NewFile>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub edits: Vec<Edit>,
 }
 
 /// Why a request is not acceptable as a request.
@@ -51,8 +67,19 @@ pub enum Refusal {
     PathEscapes(String),
     /// Changes may only add files under `docs/research/` or generated tests.
     OutsidePermittedPlaces(String),
-    /// The file exists: this version only adds files.
+    /// A new file would replace one that exists (that needs an edit, which names what it replaces).
     WouldOverwrite(String),
+    /// An edit names a file that is not there.
+    NothingToEdit(String),
+    /// The file is no longer the content the edit was written against.
+    Stale(String),
+    /// The edit would discard most of the file. An edit is a revision, not a replacement:
+    /// this is refused whatever anyone thinks of the new content.
+    DiscardsMostOfTheFile {
+        path: String,
+        lines_before: usize,
+        lines_kept: usize,
+    },
 }
 
 /// What still stands between a change and its application.
@@ -63,6 +90,17 @@ pub enum Missing {
     /// It is not currently assessed sound (for example an objection stands).
     AssessedSound,
     AlreadyApplied,
+    /// The repository is no longer what the change was verified against.
+    StillFits,
+}
+
+/// How big a change is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Size {
+    pub files_added: usize,
+    pub files_edited: usize,
+    pub lines_removed: usize,
+    pub lines_new: usize,
 }
 
 /// Where a change is in its life.
@@ -70,26 +108,70 @@ pub enum Missing {
 pub struct Progress {
     pub id: ChangeId,
     pub title: String,
+    /// What it would do, in whole lines: files added, and for edits (removed, new).
+    pub size: Size,
     pub proposed_by: ActorId,
     pub assessment: Assessment,
     pub missing: Vec<Missing>,
     pub applied: bool,
 }
 
-const PERMITTED: [&str; 2] = ["docs/research/", "crates/rigor/tests/generated_"];
+/// Where a change may add a file, and where it may edit one. Code and proofs are outside both:
+/// nothing the system proposes can alter what it is trusted for.
+const MAY_ADD: [&str; 2] = ["docs/research/", "crates/rigor/tests/generated_"];
+const MAY_EDIT: [&str; 2] = ["docs/research/", "crates/rigor/tests/generated_"];
+
+fn inside(path: &str, places: &[&str]) -> Result<(), Refusal> {
+    let p = Path::new(path);
+    if p.is_absolute() || p.components().any(|c| !matches!(c, Component::Normal(_))) {
+        return Err(Refusal::PathEscapes(path.to_owned()));
+    }
+    if !places.iter().any(|prefix| path.starts_with(prefix)) {
+        return Err(Refusal::OutsidePermittedPlaces(path.to_owned()));
+    }
+    Ok(())
+}
 
 fn permitted(root: &Path, f: &NewFile) -> Result<(), Refusal> {
-    let p = Path::new(&f.path);
-    if p.is_absolute() || p.components().any(|c| !matches!(c, Component::Normal(_))) {
-        return Err(Refusal::PathEscapes(f.path.clone()));
-    }
-    if !PERMITTED.iter().any(|prefix| f.path.starts_with(prefix)) {
-        return Err(Refusal::OutsidePermittedPlaces(f.path.clone()));
-    }
-    if root.join(p).exists() {
+    inside(&f.path, &MAY_ADD)?;
+    if root.join(&f.path).exists() {
         return Err(Refusal::WouldOverwrite(f.path.clone()));
     }
     Ok(())
+}
+
+fn editable(root: &Path, e: &Edit) -> Result<(), Refusal> {
+    inside(&e.path, &MAY_EDIT)?;
+    match std::fs::read(root.join(&e.path)) {
+        Err(_) => Err(Refusal::NothingToEdit(e.path.clone())),
+        Ok(now) if ContentDigest(rigor_kernel::digest_bytes(&now)) != e.was => Err(Refusal::Stale(e.path.clone())),
+        Ok(now) => {
+            let (before, kept, _) = line_change(&String::from_utf8_lossy(&now), &e.content);
+            // Fewer than half the original lines survive: not a revision.
+            if kept.saturating_mul(2) < before {
+                return Err(Refusal::DiscardsMostOfTheFile { path: e.path.clone(), lines_before: before, lines_kept: kept });
+            }
+            Ok(())
+        }
+    }
+}
+
+/// How an edit changes a text, by whole lines: (lines before, of those how many survive, lines new).
+#[must_use]
+pub fn line_change(before: &str, after: &str) -> (usize, usize, usize) {
+    let mut pool: BTreeMap<&str, usize> = BTreeMap::new();
+    for l in after.lines() {
+        *pool.entry(l).or_default() += 1;
+    }
+    let total_after = after.lines().count();
+    let mut kept = 0;
+    for l in before.lines() {
+        if let Some(n) = pool.get_mut(l).filter(|n| **n > 0) {
+            *n -= 1;
+            kept += 1;
+        }
+    }
+    (before.lines().count(), kept, total_after.saturating_sub(kept))
 }
 
 /// A request's identity: the digest of everything about it.
@@ -135,11 +217,16 @@ impl Steward {
     /// # Errors
     /// On I/O failure or a kernel fault.
     pub fn propose(&mut self, request: &ChangeRequest) -> Result<Result<ChangeId, Refusal>, StewardError> {
-        if request.files.is_empty() {
+        if request.files.is_empty() && request.edits.is_empty() {
             return Ok(Err(Refusal::Empty));
         }
         for f in &request.files {
             if let Err(r) = permitted(self.root(), f) {
+                return Ok(Err(r));
+            }
+        }
+        for e in &request.edits {
+            if let Err(r) = editable(self.root(), e) {
                 return Ok(Err(r));
             }
         }
@@ -201,12 +288,12 @@ impl Steward {
                 }
             }
         }
-        for f in &request.files {
-            let to = sandbox.join(&f.path);
+        for (path, content) in request.files.iter().map(|f| (&f.path, &f.content)).chain(request.edits.iter().map(|e| (&e.path, &e.content))) {
+            let to = sandbox.join(path);
             if let Some(dir) = to.parent() {
                 std::fs::create_dir_all(dir).map_err(AdapterError::Io)?;
             }
-            std::fs::write(to, &f.content).map_err(AdapterError::Io)?;
+            std::fs::write(to, content).map_err(AdapterError::Io)?;
         }
         let results = checks(&sandbox)?;
         let _ = std::fs::remove_dir_all(&sandbox);
@@ -223,12 +310,35 @@ impl Steward {
         Ok(passed)
     }
 
+    /// Have the drafting model revise an existing file to an instruction. Returns the change
+    /// request (not yet proposed), or `None` if the budget could not cover the consultation.
+    ///
+    /// # Errors
+    /// On a gateway failure, I/O failure or a kernel fault.
+    pub fn draft_edit(&mut self, gateway: &Gateway, path: &str, instruction: &str) -> Result<Option<ChangeRequest>, StewardError> {
+        const BRIEF: &str = "You revise a document exactly as instructed and change nothing else. Reply with the COMPLETE revised document from its first line to its last, including every part you did not change. Never reply with only the changed part. No preface, no commentary, no code fences.";
+        let before = std::fs::read(self.root().join(path)).map_err(AdapterError::Io)?;
+        let text = String::from_utf8_lossy(&before).into_owned();
+        let Some(revised) = self.consult(gateway, Model::Glm53Flash, BRIEF, &format!("INSTRUCTION\n{instruction}\n\nDOCUMENT\n{text}"))? else {
+            return Ok(None);
+        };
+        let mut content = revised.trim().to_owned();
+        content.push('\n');
+        Ok(Some(ChangeRequest {
+            title: format!("Revise {path}"),
+            reason: instruction.to_owned(),
+            proposed_by: crate::RESEARCHER,
+            files: Vec::new(),
+            edits: vec![Edit { path: path.to_owned(), was: ContentDigest(rigor_kernel::digest_bytes(&before)), content }],
+        }))
+    }
+
     /// Have the reviewing model read the change and acknowledge or object. `None` if the budget
     /// could not cover the consultation.
     ///
     /// # Errors
     /// On a gateway failure or a kernel fault.
-    pub fn review_change(&mut self, gateway: &Gateway, id: &ChangeId) -> Result<Option<bool>, StewardError> {
+    pub fn review_change(&mut self, gateway: &Gateway, id: &ChangeId) -> Result<Option<crate::research::Verdict>, StewardError> {
         const BRIEF: &str = "You are a strict independent reviewer of a proposed change to a project. You are shown its title, reason and the full content of every file it adds. Decide whether it should be accepted: it does what it says, is correct as far as you can tell, and would not mislead a reader. Your FIRST line must be exactly ACCEPT or REJECT, followed by at most five short bullet points.";
         if self.budget_left()? < 30_000 {
             return Ok(None);
@@ -236,15 +346,38 @@ impl Steward {
         let request = self.change(id)?;
         let mut shown = format!("TITLE\n{}\n\nREASON\n{}\n", request.title, request.reason);
         for f in &request.files {
-            shown.push_str(&format!("\nFILE {}\n{}\n", f.path, f.content.chars().take(12_000).collect::<String>()));
+            shown.push_str(&format!("\nNEW FILE {}\n{}\n", f.path, f.content.chars().take(12_000).collect::<String>()));
         }
-        let reply = gateway.ask(Model::Gpt6Luna, BRIEF, &shown, 600)?;
+        for e in &request.edits {
+            let before = std::fs::read_to_string(self.root().join(&e.path)).unwrap_or_default();
+            shown.push_str(&format!(
+                "\nEDITED FILE {}\n--- BEFORE ---\n{}\n--- AFTER ---\n{}\n",
+                e.path,
+                before.chars().take(8_000).collect::<String>(),
+                e.content.chars().take(8_000).collect::<String>()
+            ));
+        }
+        let reply = gateway.ask(Model::Gpt6Luna, BRIEF, &shown, 3000)?;
         if !self.pay(reply.micro_usd.max(1))? {
             return Ok(None);
         }
-        let accepted = reply.text.lines().map(str::trim).find(|l| !l.is_empty()).is_some_and(|l| l.starts_with("ACCEPT"));
         std::fs::write(self.changes_dir().join(format!("{id}.review.md")), &reply.text).map_err(AdapterError::Io)?;
         let prop = Prop::Sound(id.clone());
+        // A new review supersedes the reviewer's earlier one: the earlier evidence is withdrawn.
+        let on_it = self.world.epi()?.evidence_on(&prop);
+        let earlier: Vec<_> = self.world.epi()?.evidence().filter(|e| on_it.contains(&e.id) && e.source == REVIEWER).map(|e| e.id).collect();
+        for e in earlier {
+            let _ = self.world.act(&REVIEWER, Act::Retract { evidence: e })?;
+        }
+        let said = crate::research::verdict(&reply.text);
+        let accepted = match said {
+            crate::research::Verdict::Accept => true,
+            crate::research::Verdict::Reject => false,
+            crate::research::Verdict::Unclear => {
+                self.persist()?;
+                return Ok(Some(said));
+            }
+        };
         let a = Attestation {
             about: if accepted { About::Supports(prop) } else { About::Rebuts(prop) },
             method: Method::Ack,
@@ -254,7 +387,7 @@ impl Steward {
         };
         let _ = self.world.act(&REVIEWER, Act::Attest(a))?;
         self.persist()?;
-        Ok(Some(accepted))
+        Ok(Some(said))
     }
 
     /// The owner approves or rejects a change. Only ever called on the owner's instruction.
@@ -278,7 +411,7 @@ impl Steward {
         let sound = Prop::Sound(id.clone());
         let standing = epi.standing(&sound);
         let on_it = epi.evidence_on(&sound);
-        let evidence: Vec<_> = epi.evidence().filter(|e| on_it.contains(&e.id)).collect();
+        let evidence: Vec<_> = epi.standing_evidence().filter(|e| on_it.contains(&e.id)).collect();
         let by = |who: &ActorId, method: Method, supports: bool| {
             evidence.iter().any(|e| e.source == *who && e.method == method && matches!(e.about, About::Supports(_)) == supports)
         };
@@ -298,7 +431,15 @@ impl Steward {
         if !by(&OWNER, Method::Audit, true) || by(&OWNER, Method::Audit, false) {
             missing.push(Missing::OwnersApproval);
         }
-        Ok(Progress { id: id.clone(), title: request.title, proposed_by: request.proposed_by, assessment: standing.assessment, missing, applied })
+        let mut size = Size { files_added: request.files.len(), files_edited: request.edits.len(), ..Size::default() };
+        size.lines_new = request.files.iter().map(|f| f.content.lines().count()).sum();
+        for e in &request.edits {
+            let now = std::fs::read_to_string(self.root().join(&e.path)).unwrap_or_default();
+            let (before, kept, new) = line_change(&now, &e.content);
+            size.lines_removed += before - kept;
+            size.lines_new += new;
+        }
+        Ok(Progress { id: id.clone(), title: request.title, size, proposed_by: request.proposed_by, assessment: standing.assessment, missing, applied })
     }
 
     /// Apply a change: write its files into the repository. Refused, with what is missing,
@@ -312,18 +453,17 @@ impl Steward {
             return Ok(Err(progress.missing));
         }
         let request = self.change(id)?;
-        for f in &request.files {
-            // Checked again at the moment of writing: the repository may have changed since the proposal.
-            if permitted(self.root(), f).is_err() {
-                return Ok(Err(vec![Missing::AssessedSound]));
-            }
+        // Checked again at the moment of writing: the repository may have changed since the
+        // proposal. A change verified against content that is no longer there is not applied.
+        if request.files.iter().any(|f| permitted(self.root(), f).is_err()) || request.edits.iter().any(|e| editable(self.root(), e).is_err()) {
+            return Ok(Err(vec![Missing::StillFits]));
         }
-        for f in &request.files {
-            let to = self.root().join(&f.path);
+        for (path, content) in request.files.iter().map(|f| (&f.path, &f.content)).chain(request.edits.iter().map(|e| (&e.path, &e.content))) {
+            let to = self.root().join(path);
             if let Some(dir) = to.parent() {
                 std::fs::create_dir_all(dir).map_err(AdapterError::Io)?;
             }
-            std::fs::write(to, &f.content).map_err(AdapterError::Io)?;
+            std::fs::write(to, content).map_err(AdapterError::Io)?;
         }
         let _ = self.world.act(&CI, attest(About::Supports(Prop::Applied(id.clone())), Method::Probe, "files written to the repository"))?;
         self.persist()?;

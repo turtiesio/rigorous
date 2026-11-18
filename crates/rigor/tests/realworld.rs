@@ -147,7 +147,7 @@ fn model_check_maintenance_commitment() {
     let norms: Box<dyn Unit<Event>> = Box::new(Cell(Norms::default()));
     let mut rt: Runtime<Event> = Runtime::new(Box::new(Par::new(vec![norms], &open_kinds()).unwrap()));
     let o = Offer { creditor: PROJECT, ant: None, cons: Condition::Unrefuted(p.clone()), deadline: Time(2), tags: BTreeSet::new(), parent: None, terms: None };
-    let _ = rt.inject(&env, Event::Ok { by: d.clone(), via: CapId::Base(d), act: Act::Commit(o) }).unwrap();
+    let _ = rt.inject_unchecked(rigor::kernel::Path::of(&env), Event::Ok { by: d.clone(), via: CapId::Base(d), act: Act::Commit(o) }).unwrap();
     let id = rt.leaf::<Norms>(&[NORMS]).unwrap().records().next().unwrap().commitment.id;
     let assessed = |a: Assessment| {
         (env.clone(), Event::Assessed { prop: p.clone(), assessment: a, since: None, basis: Vec::new(), was: Assessment::Unsupported, rules: Version(1) })
@@ -494,8 +494,11 @@ fn the_reflector_proposes_a_rule_change_from_the_record_and_cannot_enact_it_alon
     let entrenched = w.act_with(&REFLECTOR, &CapId::Charter(REFLECT), Act::Propose { amendments: vec![Amendment::SetSelfSupport(true)] }).unwrap();
     assert!(entrenched.iter().any(|e| matches!(&e.event, Event::GovRejected { reason: GovError::Entrenched(_), .. })));
 
-    // A human approves: the rule set changes, and existing assessments are revised under it.
+    // Its having proposed counts for nothing towards the quorum: two holders of the power to
+    // approve must approve. Then the rule set changes, and existing assessments are revised.
     let _ = w.act_with(&ALICE, &CapId::Charter(GOV_ALICE), Act::Approve { id }).unwrap();
+    assert_eq!(w.gov().unwrap().version(), Version(1));
+    let _ = w.act_with(&AUDITOR, &CapId::Charter(rigor::scenario::GOV_AUDITOR), Act::Approve { id }).unwrap();
     assert_eq!((w.gov().unwrap().version(), rank(&w, Method::Probe)), (Version(2), Rank(2)));
     assert_eq!(w.epi().unwrap().assessment(&q), Assessment::Contested); // the probe no longer outranks the test
                                                                         // The record of the re-ranked method starts afresh.
@@ -549,7 +552,7 @@ fn the_steward_keeps_an_honest_record_across_runs() {
 
     // A roadmap item is closed only by the project's acceptance, not by the maintainer's say-so.
     let item = BACKLOG[0].requirement.clone();
-    s.accept(item.clone(), 101).unwrap();
+    assert!(s.accept(item.clone(), 101).unwrap());
     assert_eq!(s.commitments(Tag::Task).unwrap().iter().filter(|(_, st)| *st == Status::Satisfied).count(), 1);
     assert_eq!(s.world.epi().unwrap().assessment(&Prop::Conforms(item)), Assessment::Accepted);
     assert_eq!(s.world.epi().unwrap().assessment(&Prop::Conforms(Requirement::lit("never-heard-of-it"))), Assessment::Unsupported);
@@ -630,7 +633,10 @@ fn the_reflector_learns_the_maintenance_period_from_how_late_refutations_arrive(
     let r = w.rt.leaf::<Reflector>(&[REFLECTOR.0]).unwrap();
     assert_eq!((r.refutations_observed(), r.ninety_percent_delay()), (5, Some(80 * day)));
     assert_eq!(period(&w), 30, "proposing changes nothing");
+    // Proposing is not approving, and one approval is not a quorum of two.
     let _ = w.act_with(&PROJECT, &CapId::Charter(gitlog::GOVERN_PROJECT), Act::Approve { id: proposal.unwrap() }).unwrap();
+    assert_eq!(period(&w), 30);
+    let _ = w.act_with(&REGISTRAR, &CapId::Charter(gitlog::GOVERN_REGISTRAR), Act::Approve { id: proposal.unwrap() }).unwrap();
     assert_eq!((w.gov().unwrap().version(), period(&w)), (Version(2), 70)); // nine in ten of the first four
                                                                             // The rule guards itself: a period of zero cannot be enacted by anyone.
     let zero = w
@@ -780,7 +786,15 @@ fn a_snapshot_is_resumed_only_once_someone_trusted_has_shown_it_faithful() {
     std::fs::write(&bad, bincode_of(&forged)).unwrap();
     assert!(!audit_snapshot(&mut w, fresh(), &forged, &AUDITOR).unwrap());
     assert!(matches!(resume_attested(fresh(), &bad, &w), Err(AdapterError::SnapshotNotAttested)));
-    assert_eq!(w.epi().unwrap().assessment(&Prop::Faithful(rigor::model::ContentDigest(forged.digest))), Assessment::Refuted);
+    assert_eq!(w.epi().unwrap().assessment(&rigor::adapters::faithful(&forged).unwrap()), Assessment::Refuted);
+    // The attestation names the whole snapshot, not just its state: the audited state re-pointed
+    // at another place in the log is a different snapshot, which nobody has attested.
+    let mut repointed = snap.clone();
+    repointed.seq = 3;
+    repointed.head = rigor::kernel::Digest(0xDEAD_BEEF);
+    let moved = dir.join("moved.snapshot");
+    std::fs::write(&moved, bincode_of(&repointed)).unwrap();
+    assert!(matches!(resume_attested(fresh(), &moved, &w), Err(AdapterError::SnapshotNotAttested)));
     // An audit needs the history: a compacted world cannot vouch for a snapshot.
     w.rt.compact();
     assert!(matches!(audit_snapshot(&mut w, fresh(), &snap, &AUDITOR), Err(AdapterError::NotAuditable)));
@@ -957,8 +971,9 @@ mod federation {
     fn until_vendor_is_liable(w: &mut World) -> (rigor::model::CommitmentId, Prop) {
         let _ = w.act_with(&ALICE, &CapId::Own(ALICE), budget(AGENT, ALICE, 50, true)).unwrap();
         let _ = w.act(&ALICE, Act::Request(Request { to: AGENT, task: Task::whole(TASK1), deadline: Time(5), parent: None, terms: None })).unwrap();
-        let _ = w.tick(6).unwrap();
         let deployed = Prop::Done(Task::whole(TASK1).step(TaskName::lit("deploy")));
+        let _ = w.act(&rigor::scenario::CI, attest(About::Supports(deployed.clone()), Method::Test, "smoke test passed")).unwrap();
+        let _ = w.tick(6).unwrap();
         let _ = w.act(&MONITOR, attest(About::Rebuts(deployed), Method::Probe, "not there")).unwrap();
         let duty = w.one(&VENDOR, Tag::Remediation).unwrap();
         let Condition::Holds(p) = duty.terms().cons.clone() else { panic!("remediation is a proposition") };
@@ -1043,4 +1058,38 @@ mod federation {
         let outer = w.adj().unwrap().findings(&duty);
         assert!(outer.contains(&(Finding::Accountable, VENDOR)) && !outer.iter().any(|(_, who)| *who == ENG));
     }
+}
+
+// ---------------------------------------------------------------- a forge's public event archive
+
+#[test]
+fn real_forge_reviews_with_superseded_and_dismissed_reviews_agree_with_the_oracle() {
+    // 6,000 real happenings from GitHub's public event archive (November 2026), about pull
+    // requests that were reviewed: openings, approvals, change requests, dismissals, merges.
+    // A reviewer's later review withdraws the earlier one: real retraction.
+    use rigor::forge::{conclusions as assessed, found, import, oracle as expected_standing, Ingest as Forge, Verdict, What};
+    let all = import(include_str!("data/forge-window.txt")).unwrap();
+    assert_eq!(all.len(), 6000);
+    let mut w = found().unwrap();
+    let mut ingest = Forge::default();
+    for h in &all {
+        ingest.happen(&mut w, h).unwrap();
+    }
+    let s = &ingest.stats;
+    assert_eq!(s.refused, 0);
+    assert!(s.approvals > 1000 && s.change_requests > 100 && s.dismissals > 50 && s.reviews_withdrawn > 20, "{s:?}");
+    let expected = expected_standing(&all);
+    let got = assessed(&w, &expected).unwrap();
+    assert_eq!(got, expected);
+    // All four standings occur in real data.
+    for a in [Assessment::Accepted, Assessment::Refuted, Assessment::Unsupported] {
+        assert!(got.values().any(|x| *x == a), "{a:?}");
+    }
+    // A change whose only review was dismissed stands unsupported, not refuted.
+    let dismissed_only = all.iter().find(|h| h.what == What::Reviewed(Verdict::Dismissed) && got.get(&h.change) == Some(&Assessment::Unsupported));
+    assert!(dismissed_only.is_some());
+    let epi = w.epi().unwrap();
+    assert!(epi.full().iter().all(|(p, st)| epi.standing(p) == *st));
+    assert!(w.rt.log().verify().is_ok());
+    assert!(matches!(import("X a b 1"), Err(rigor::forge::ForgeError::Malformed { line: 1 })));
 }

@@ -1,8 +1,8 @@
 //! The end-to-end demonstrator.
 //!
 //! A human delegates a task and a budget to an AI agent. The agent subcontracts a service and
-//! pays it. The service fails and says so; the agent reports success anyway, citing the
-//! service's receipt. The claim is at first accepted. A monitor's probe later refutes it, and
+//! pays it. The service fails and says so; the agent reports success anyway, citing an
+//! independent smoke test that passed. The claim is at first accepted. A monitor's probe later refutes it, and
 //! the system works out the consequences.
 
 use crate::actors::{service, Agent, Monolith, CREDIT};
@@ -182,6 +182,8 @@ pub fn run(cast: Cast, amend: bool, mut say: impl FnMut(&str)) -> Result<(World,
         }),
     )?;
     let _ = w.act(&ALICE, Act::Request(Request { to: AGENT, task: task1(), deadline: Time(5), parent: None, terms: None }))?;
+    // An independent smoke test passes: the first evidence that the deployment happened.
+    let _ = w.act(&CI, attest(About::Supports(deployed.clone()), Method::Test, "smoke test of the deployment passed"))?;
     let c0 = w.one(&ALICE, Tag::Payment)?.commitment.id;
     let c1 = w.one(&AGENT, Tag::Task)?.commitment.id;
     let c2 = w.one(&DEPLOYER, Tag::Service)?.commitment.id;
@@ -227,6 +229,8 @@ pub fn run(cast: Cast, amend: bool, mut say: impl FnMut(&str)) -> Result<(World,
                 _ => None,
             })
             .ok_or(Error::Expected("proposal accepted for voting"))?;
+        // Proposing is not approving: both holders of the power must approve.
+        let _ = w.act_with(&ALICE, &ga, Act::Approve { id })?;
         enacted = w.act_with(&AUDITOR, &gu, Act::Approve { id })?.iter().find_map(|e| match &e.event {
             Event::RulesChanged(rc) => Some(rc.version),
             _ => None,

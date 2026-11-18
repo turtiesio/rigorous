@@ -204,10 +204,16 @@ impl Institution {
                     return Ok(Err(DenyReason::ZeroAmount));
                 }
                 for c in &chain {
-                    if let Some(lim) = c.limits.get(&t.resource) {
-                        if self.spent(&c.id, &t.resource).0.saturating_add(t.amount.0) > lim.0 {
-                            return Ok(Err(DenyReason::BudgetExceeded(c.id.clone())));
+                    match c.limits.get(&t.resource) {
+                        Some(lim) => {
+                            if self.spent(&c.id, &t.resource).0.saturating_add(t.amount.0) > lim.0 {
+                                return Ok(Err(DenyReason::BudgetExceeded(c.id.clone())));
+                            }
                         }
+                        // A capability that is limited at all is a budget: it covers only the
+                        // resources it names. "Fifty credits" is not also unlimited gold.
+                        None if !c.limits.is_empty() => return Ok(Err(DenyReason::BudgetExceeded(c.id.clone()))),
+                        None => {}
                     }
                 }
                 for c in &chain {

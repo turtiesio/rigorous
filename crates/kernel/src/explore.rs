@@ -1,4 +1,7 @@
 //! Bounded explicit-state exploration.
+//!
+//! A harness, not a boundary: it feeds a unit whatever its neighbours could have produced, so it
+//! delivers alphabets without the check that a stimulus is of a kind the outside may send.
 
 use super::base::Digest;
 use super::log::Entry;
@@ -41,7 +44,7 @@ pub fn reach<E: Payload, V>(
         for (rt, trace) in &frontier {
             for a in alphabet {
                 let mut r = rt.fork();
-                let entries = r.inject(&a.0, a.1.clone())?;
+                let entries = r.inject_unchecked(super::Path::of(&a.0), a.1.clone())?;
                 transitions += 1;
                 let mut t = trace.clone();
                 t.push(a.clone());
@@ -73,7 +76,7 @@ pub fn interleavings<E: Payload>(start: &Runtime<E>, stimuli: &[(Name, E)]) -> R
         }
         for (i, s) in rest.iter().enumerate() {
             let mut r = rt.fork();
-            let _ = r.inject(&s.0, s.1.clone())?;
+            let _ = r.inject_unchecked(super::Path::of(&s.0), s.1.clone())?;
             let others: Vec<(Name, E)> = rest.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, x)| x.clone()).collect();
             go(&r, &others, out)?;
         }

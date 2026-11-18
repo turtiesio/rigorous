@@ -119,7 +119,7 @@ fn a_composite_can_be_substituted_by_an_atomic_unit() {
     assert_eq!(state_digest(w.ledger().unwrap()), state_digest(mono.ledger().unwrap()));
     assert_eq!(state_digest(w.epi().unwrap()), state_digest(mono.epi().unwrap()));
     assert_eq!(state_digest(w.norms().unwrap()), state_digest(mono.norms().unwrap()));
-    assert_eq!(state_digest(w.adj().unwrap()), state_digest(mono.adj().unwrap()));
+    assert_eq!(w.adj().unwrap().verdicts().collect::<Vec<_>>(), mono.adj().unwrap().verdicts().collect::<Vec<_>>());
     assert_eq!(state_digest(w.gov().unwrap()), state_digest(mono.gov().unwrap()));
     let agent = |x: &rigor::world::World| state_digest(x.rt.leaf::<rigor::actors::Agent>(&[AGENT.0]).unwrap());
     assert_eq!(agent(&w), agent(&mono));
@@ -331,4 +331,152 @@ fn datalog_rejects_what_has_no_unique_meaning() {
     );
     let dup = vec![rule(1, P::Flag, &[X], vec![pos(P::Node, &[X])]), rule(1, P::Other, &[X], vec![pos(P::Node, &[X])])];
     assert_eq!(datalog::check(&dup), Err(RuleError::DuplicateId(1)));
+}
+
+// ---------------------------------------------------------------- the runtime against the proved model
+
+/// A line-by-line transcription of the Lean model in proofs/Rigor.lean: `Unit`, `par`, `drive`.
+/// States and events are small numbers; a unit is its initial state and its step table.
+mod lean_model {
+    pub type Table = Vec<Vec<(u8, Vec<u8>)>>; // table[state][event] = (next state, outputs)
+
+    #[derive(Clone)]
+    pub enum Unit {
+        Leaf(Table),
+        Par(Box<Unit>, Box<Unit>),
+    }
+
+    #[derive(Clone, Debug, PartialEq)]
+    pub enum State {
+        Leaf(u8),
+        Par(Box<State>, Box<State>),
+    }
+
+    impl Unit {
+        pub fn init(&self) -> State {
+            match self {
+                Self::Leaf(_) => State::Leaf(0),
+                Self::Par(a, b) => State::Par(Box::new(a.init()), Box::new(b.init())),
+            }
+        }
+        // def par ... step := fun s e => let a := A.step s.1 e; let b := B.step s.2 e; ((a.1, b.1), a.2 ++ b.2)
+        pub fn step(&self, s: &State, e: u8) -> (State, Vec<u8>) {
+            match (self, s) {
+                (Self::Leaf(t), State::Leaf(x)) => {
+                    let (next, out) = t[usize::from(*x)][usize::from(e)].clone();
+                    (State::Leaf(next), out)
+                }
+                (Self::Par(a, b), State::Par(sa, sb)) => {
+                    let (na, mut oa) = a.step(sa, e);
+                    let (nb, ob) = b.step(sb, e);
+                    oa.extend(ob);
+                    (State::Par(Box::new(na), Box::new(nb)), oa)
+                }
+                _ => panic!("state shape follows unit shape"),
+            }
+        }
+    }
+
+    // def drive : Nat → U.S → List E → List E
+    //   | 0, _, _ => [] | _ + 1, _, [] => [] | n + 1, s, e :: q => e :: drive U n (U.step s e).1 (q ++ (U.step s e).2)
+    pub fn drive(u: &Unit, fuel: usize, mut s: State, mut q: std::collections::VecDeque<u8>) -> Vec<u8> {
+        let mut log = Vec::new();
+        for _ in 0..fuel {
+            let Some(e) = q.pop_front() else { break };
+            let (next, out) = u.step(&s, e);
+            log.push(e);
+            q.extend(out);
+            s = next;
+        }
+        log
+    }
+}
+
+/// The same step table as a real unit of the real kernel.
+#[derive(Clone, Debug, Hash, serde::Serialize, serde::Deserialize)]
+struct Tabled {
+    name: Name,
+    state: u8,
+    table: lean_model::Table,
+}
+
+fn symbol(n: u8) -> Prop {
+    Prop::Fact(Name::new(&format!("e{n}")).unwrap())
+}
+
+impl Leaf<Event> for Tabled {
+    fn name(&self) -> Name {
+        self.name.clone()
+    }
+    fn inputs(&self) -> BTreeSet<Kind> {
+        std::iter::once(Kind::Signal).collect()
+    }
+    fn outputs(&self) -> BTreeSet<Kind> {
+        std::iter::once(Kind::Signal).collect()
+    }
+    fn on(&mut self, env: &Envelope<'_, Event>) -> Result<Vec<Event>, LeafError> {
+        let Event::Signal { prop, .. } = env.event else { return Ok(Vec::new()) };
+        let e = (0..5u8).find(|n| symbol(*n) == *prop).unwrap();
+        let (next, out) = self.table[usize::from(self.state)][usize::from(e)].clone();
+        self.state = next;
+        Ok(out.into_iter().map(|n| Event::Signal { to: ALICE, prop: symbol(n), value: true }).collect())
+    }
+}
+
+#[test]
+fn the_runtime_agrees_with_a_transcription_of_the_proved_model() {
+    // 400 random triples of units, composed and driven two ways: by the real kernel (Par,
+    // Runtime, the queue, the log) and by a direct transcription of the Lean definitions that
+    // theorems T1-T9 are about. The logs must be identical, event for event, including when the
+    // cascade is cut off by fuel. This is evidence that the code realises the model; it is a
+    // test of a transcription, not a proof.
+    let mut rng = Rng::new(11);
+    let (states, events) = (3usize, 5usize);
+    let mut diverged = 0;
+    for case in 0..400 {
+        let tables: Vec<lean_model::Table> = (0..3)
+            .map(|_| {
+                (0..states)
+                    .map(|_| {
+                        (0..events)
+                            .map(|_| {
+                                (
+                                    u8::try_from(rng.below(states)).unwrap(),
+                                    (0..rng.below(3).saturating_sub(usize::from(rng.percent(55)))).map(|_| u8::try_from(rng.below(events)).unwrap()).collect(),
+                                )
+                            })
+                            .collect()
+                    })
+                    .collect()
+            })
+            .collect();
+        let first = u8::try_from(rng.below(events)).unwrap();
+        let fuel = 60;
+
+        // The model: (a ∥ b) ∥ c.
+        let leaf = |i: usize| Box::new(lean_model::Unit::Leaf(tables[i].clone()));
+        let model = lean_model::Unit::Par(Box::new(lean_model::Unit::Par(leaf(0), leaf(1))), leaf(2));
+        let expected = lean_model::drive(&model, fuel, model.init(), std::iter::once(first).collect());
+
+        // The real thing, bracketed the same way.
+        let open = open_kinds();
+        let unit =
+            |i: usize, n: &'static str| -> Box<dyn Unit<Event>> { Box::new(Cell(Tabled { name: Name::new(n).unwrap(), state: 0, table: tables[i].clone() })) };
+        let inner = Par::new(vec![unit(0, "a"), unit(1, "b")], &open).unwrap();
+        let root = Par::new(vec![Box::new(inner), unit(2, "c")], &open).unwrap();
+        let mut rt = Runtime::new(Box::new(root)).with_fuel(u64::try_from(fuel).unwrap());
+        let outcome = rt.inject(&Name::lit("env"), Event::Signal { to: ALICE, prop: symbol(first), value: true });
+        diverged += usize::from(outcome.is_err());
+        let actual: Vec<u8> = rt
+            .log()
+            .entries()
+            .iter()
+            .map(|e| match &e.event {
+                Event::Signal { prop, .. } => (0..5u8).find(|n| symbol(*n) == *prop).unwrap(),
+                other => panic!("unexpected {other:?}"),
+            })
+            .collect();
+        assert_eq!(actual, expected, "case {case}");
+    }
+    assert!(diverged > 20 && diverged < 380, "both terminating and fuel-limited cascades must be covered: {diverged}");
 }

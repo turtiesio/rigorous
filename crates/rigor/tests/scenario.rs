@@ -173,6 +173,7 @@ fn non_retroactive_rules_do_not_reach_back() {
             _ => None,
         })
         .unwrap();
+    let _ = w.act_with(&ALICE, &CapId::Charter(GOV_ALICE), Act::Approve { id }).unwrap();
     let entries = w.act_with(&AUDITOR, &CapId::Charter(GOV_AUDITOR), Act::Approve { id }).unwrap();
     assert_eq!(w.gov().unwrap().version(), Version(2));
     assert!(!entries.iter().any(|e| matches!(e.event, Event::Verdict(_))));

@@ -6,10 +6,14 @@
 //!
 //! * support and rebuttal of one proposition attack each other; an attack on strictly
 //!   stronger evidence fails;
-//! * an undercutter attacks a piece of evidence itself and always succeeds;
+//! * an undercutter attacks a piece of evidence itself, and fails only against strictly
+//!   stronger evidence;
+//! * an inference can only SUPPORT, and only a conclusion that follows from what it cites by
+//!   one of the fixed lines of [`Prop::follows_from`];
 //! * a successful attack on evidence also hits everything derived from it;
 //! * evidence bound to an artifact digest is stale once the artifact differs;
-//! * support rooted in the claimant's own word is inadmissible.
+//! * support rooted in the word of an INTERESTED party is inadmissible: whoever claimed the
+//!   proposition, and whoever owes a commitment that it would discharge.
 //!
 //! Reassessment is local to what lies DOWNSTREAM of the evidence that changed: what it
 //! attacks, what is derived from it, and so on. Everything upstream keeps its recorded label
@@ -40,6 +44,9 @@ struct Item {
     roots: BTreeSet<ActorId>,
     /// Effective strength under the rules in force: the weakest link down to its roots.
     rank: Option<Rank>,
+    /// When it most recently began to count (became admissible). Evidence that was stale or
+    /// untrusted for a while counts from when that ended, not from when it first arrived.
+    counts_from: Time,
     /// Recorded results of the last revision that touched it.
     admissible: bool,
     label: Label,
@@ -75,6 +82,8 @@ pub struct Epistemic {
     version: Version,
     rules: EvidenceRules,
     claims: BTreeMap<Prop, BTreeMap<ActorId, Time>>,
+    /// Who owes a commitment that the proposition would discharge.
+    owing: BTreeMap<Prop, BTreeSet<ActorId>>,
     ev: BTreeMap<EvidenceId, Item>,
     by_prop: BTreeMap<Prop, BTreeSet<EvidenceId>>,
     kids: BTreeMap<EvidenceId, BTreeSet<EvidenceId>>,
@@ -93,6 +102,7 @@ impl Default for Epistemic {
             version: Version::default(),
             rules: EvidenceRules { ranks: BTreeMap::new(), trusted: BTreeMap::new(), self_support: false },
             claims: BTreeMap::new(),
+            owing: BTreeMap::new(),
             ev: BTreeMap::new(),
             by_prop: BTreeMap::new(),
             kids: BTreeMap::new(),
@@ -122,6 +132,11 @@ impl Epistemic {
 
     pub fn evidence(&self) -> impl Iterator<Item = &Evidence> {
         self.ev.values().map(|i| &i.ev)
+    }
+
+    /// Evidence that has not been withdrawn by its source.
+    pub fn standing_evidence(&self) -> impl Iterator<Item = &Evidence> {
+        self.ev.values().filter(|i| !i.retracted).map(|i| &i.ev)
     }
 
     #[must_use]
@@ -178,11 +193,7 @@ impl Epistemic {
             };
             let fresh = e.artifacts.iter().all(|(a, d)| self.art.get(a) == Some(d));
             let independent = match &e.about {
-                About::Supports(p) if !self.rules.self_support => match self.claims.get(p) {
-                    // Nobody has claimed it: nothing can be self-support.
-                    None => true,
-                    Some(claimants) => !self.roots(id, roots).iter().any(|s| claimants.contains_key(s)),
-                },
+                About::Supports(p) if !self.rules.self_support => !self.interested(p, self.roots(id, roots).into_iter()),
                 About::Supports(_) | About::Rebuts(_) | About::Undercuts(_) => true,
             };
             !item.retracted
@@ -247,7 +258,7 @@ impl Epistemic {
             match &item.ev.about {
                 About::Supports(p) => sides.entry(p).or_default().0.push(*e),
                 About::Rebuts(p) => sides.entry(p).or_default().1.push(*e),
-                About::Undercuts(t) if adm.contains(t) => direct.push((*e, *t)),
+                About::Undercuts(t) if adm.contains(t) && rank.get(t) <= rank.get(e) => direct.push((*e, *t)),
                 About::Undercuts(_) => {}
             }
         }
@@ -302,6 +313,11 @@ impl Epistemic {
         self.by_prop.keys().chain(self.status.keys()).map(|p| (p.clone(), self.assess(p, &labels))).collect()
     }
 
+    /// Whether any of these sources has a stake in the proposition being accepted.
+    fn interested(&self, p: &Prop, mut sources: impl Iterator<Item = ActorId>) -> bool {
+        sources.any(|s| self.claims.get(p).is_some_and(|c| c.contains_key(&s)) || self.owing.get(p).is_some_and(|o| o.contains(&s)))
+    }
+
     /// Whether an item passes every test that does not depend on other items' labels,
     /// given that what it is derived from is admissible.
     fn passes(&self, item: &Item) -> bool {
@@ -312,7 +328,7 @@ impl Epistemic {
             None => false,
         };
         let independent = match &e.about {
-            About::Supports(p) if !self.rules.self_support => self.claims.get(p).is_none_or(|claimants| !item.roots.iter().any(|s| claimants.contains_key(s))),
+            About::Supports(p) if !self.rules.self_support => !self.interested(p, item.roots.iter().cloned()),
             About::Supports(_) | About::Rebuts(_) | About::Undercuts(_) => true,
         };
         !item.retracted
@@ -345,7 +361,8 @@ impl Epistemic {
     /// The admissible items that attack `y` itself (not through what it is derived from).
     fn direct_attackers(&self, y: EvidenceId, into: &mut BTreeSet<EvidenceId>) {
         let Some(item) = self.ev.get(&y) else { return };
-        into.extend(self.cutters.get(&y).into_iter().flatten().copied().filter(|c| self.ev.get(c).is_some_and(|x| x.admissible)));
+        // An undercut fails against strictly stronger evidence, like any other attack.
+        into.extend(self.cutters.get(&y).into_iter().flatten().copied().filter(|c| self.ev.get(c).is_some_and(|x| x.admissible && item.rank <= x.rank)));
         let supports = match &item.ev.about {
             About::Supports(_) => true,
             About::Rebuts(_) => false,
@@ -385,7 +402,11 @@ impl Epistemic {
         ordered.sort_unstable();
         for (_, e) in &ordered {
             let ok = self.ev.get(e).is_some_and(|i| self.passes(i));
+            let now = self.now;
             if let Some(i) = self.ev.get_mut(e) {
+                if ok && !i.admissible {
+                    i.counts_from = now;
+                }
                 i.admissible = ok;
             }
         }
@@ -468,9 +489,23 @@ impl Epistemic {
             out.push(reject(EvidenceError::UnknownProvenance));
             return Ok(());
         }
-        if a.method == Method::Inference && a.derived_from.is_empty() {
-            out.push(reject(EvidenceError::UngroundedInference));
-            return Ok(());
+        if a.method == Method::Inference {
+            if a.derived_from.is_empty() {
+                out.push(reject(EvidenceError::UngroundedInference));
+                return Ok(());
+            }
+            let About::Supports(conclusion) = &a.about else {
+                out.push(reject(EvidenceError::InferenceMustSupport));
+                return Ok(());
+            };
+            let follows = a
+                .derived_from
+                .iter()
+                .all(|p| matches!(self.ev.get(p).map(|i| &i.ev.about), Some(About::Supports(premise)) if conclusion.follows_from(premise)));
+            if !follows {
+                out.push(reject(EvidenceError::DoesNotFollow));
+                return Ok(());
+            }
         }
         let id = EvidenceId(digest_of(&(by, a, self.now))?);
         if self.ev.contains_key(&id) {
@@ -509,7 +544,7 @@ impl Epistemic {
         };
         let rank = self.rank_of(ev.method, &ev.derived_from);
         let depth = ev.derived_from.iter().filter_map(|p| self.ev.get(p)).map(|i| i.order).max().map_or(0, |d| d + 1);
-        let _ = self.ev.insert(id, Item { ev, retracted: false, order: depth, roots, rank, admissible: false, label: Label::Out });
+        let _ = self.ev.insert(id, Item { ev, retracted: false, order: depth, roots, rank, counts_from: self.now, admissible: false, label: Label::Out });
         self.revise([id], [], out);
         Ok(())
     }
@@ -520,7 +555,7 @@ impl Leaf<Event> for Epistemic {
         EPI
     }
     fn inputs(&self) -> BTreeSet<Kind> {
-        [Kind::Tick, Kind::RulesChanged, Kind::Ok, Kind::ArtifactChanged].into_iter().collect()
+        [Kind::Tick, Kind::RulesChanged, Kind::Ok, Kind::ArtifactChanged, Kind::NormCreated].into_iter().collect()
     }
     fn outputs(&self) -> BTreeSet<Kind> {
         [Kind::Assessed, Kind::EvidenceRecorded, Kind::EvidenceRejected, Kind::EvidenceRetracted].into_iter().collect()
@@ -548,6 +583,14 @@ impl Leaf<Event> for Epistemic {
                 if self.art.get(artifact) != Some(digest) {
                     let _ = self.art.insert(artifact.clone(), *digest);
                     self.revise(self.evidence_about_artifact(artifact), [], &mut out);
+                }
+            }
+            Event::NormCreated(c) => {
+                // Whoever owes a commitment has a stake in the proposition that would discharge it.
+                if let crate::model::Condition::Holds(p) | crate::model::Condition::Unrefuted(p) = &c.terms.cons {
+                    if self.owing.entry(p.clone()).or_default().insert(c.terms.debtor.clone()) {
+                        self.revise(self.evidence_on(p), [p.clone()], &mut out);
+                    }
                 }
             }
             Event::Ok { by, act: Act::Claim { prop }, .. } => {

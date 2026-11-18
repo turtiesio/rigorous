@@ -333,6 +333,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "rigor-adapter-chain",
+ "rigor-adapter-forge",
  "rigor-adapter-git",
  "rigor-adapter-host",
  "rigor-adapter-registry",
@@ -352,6 +353,17 @@ version = "0.1.0"
 dependencies = [
  "rigor-institution",
  "rigor-kernel",
+]
+
+[[package]]
+name = "rigor-adapter-forge"
+version = "0.1.0"
+dependencies = [
+ "flate2",
+ "rigor-institution",
+ "rigor-kernel",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

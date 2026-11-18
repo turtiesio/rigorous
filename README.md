@@ -15,16 +15,19 @@ are denied by lint in library code.
 ## Run it
 
 ```sh
-cargo run --bin scenario                      # the end-to-end demonstrator, narrated
-cargo run --bin steward                       # the project checks itself and records the evidence
-cargo test                                    # 72 tests + 8 doctests; includes six slices of real data
+cargo run --bin steward                       # the project checks and examines itself; writes the dashboard
+cargo run --bin steward -- cycle 2            # the same, plus research on 2 open questions via two models
+cargo run --bin steward -- can                # what it can do, what it cannot, and what is lacking
+cargo run --bin scenario                      # the original end-to-end demonstrator, narrated
+cargo test                                    # 82 tests + 8 doctests; includes seven slices of real data
 cargo clippy --all-targets                    # the strict lint set in Cargo.toml; must be clean
 cargo run --release --bin measure             # regenerates docs/04-measurements.md
 cargo run --release --bin stress -- <bare git repo>...   # real histories through the whole system
 lean proofs/Rigor.lean                        # 9 machine-checked theorems about the model
 ```
 
-Dependencies: `serde`, `serde_json`, `sha2`. Lean 4 is needed only to re-check the proofs.
+Model calls go through the Vercel AI Gateway and need a credential (`AI_GATEWAY_API_KEY`, or a key file) and
+a budget granted by the owner; without them the system says it cannot research and carries on with the rest.
 
 ## The idea in one screen
 
@@ -116,22 +119,30 @@ format that could not evolve, and several missing concepts; those were fixed. Wh
 | `docs/03-status-ledger.md` | **Every claim, marked proved / compiler-enforced / model-checked / tested / assumed / unresolved**; negative results; trusted assumptions |
 | `docs/04-measurements.md` | Trusted-base size, encoding overhead, scaling, state-space growth (release build) |
 | `docs/05-roadmap.md` | What it lacks: address next / deferred / parked, with reasons and triggers |
+| `docs/07-running-itself.md` | How it runs itself: members, one turn, its account of itself, change control, the owner's commands |
 | `docs/06-real-data.md` | Stress against real data (git histories, Bitcoin blocks, a package registry, forge reviews): results, what broke, what remains |
 
 ## Layout
 
+The dependency direction is enforced by Cargo: nothing below depends on anything above it.
+
 ```
-crates/rigor/src/
-  kernel/      base.rs log.rs unit.rs runtime.rs   the trusted substrate (generic in the event type)
-               explore.rs                          bounded model checker
-  logic/       argue.rs datalog.rs                 the two reasoners (generic)
-  model/       ids.rs event.rs rules.rs            the closed, typed vocabulary
-  units/       institution ledger epistemic norms adjudicator governance reflector envoy
-  org.rs actors.rs scenario.rs world.rs impact.rs adapters.rs synth.rs
-  gitlog.rs chain.rs registry.rs steward.rs        real-data adapters; self-stewardship
-  bin/         scenario.rs measure.rs stress.rs steward.rs
-crates/rigor/tests/   kernel scenario properties counterexamples adapters realworld
+crates/kernel/         names, hash-chained log, units, composition, runtime, snapshots   (knows no institution)
+crates/logic/          grounded argumentation; sorted, stratified Datalog               (knows no institution)
+crates/institution/    the typed vocabulary and the institutional units; performs no I/O
+crates/adapters/host/      files, processes, stored logs, snapshots, migration, re-founding
+crates/adapters/git/       git histories
+crates/adapters/chain/     blocks of transfers
+crates/adapters/registry/  a package registry
+crates/adapters/forge/     a forge's public event archive
+crates/mind/           language models through an AI gateway
+crates/demo/           the demonstrator scenario, its actors, synthetic worlds
+crates/steward/        the system looking after itself: checks, self-model, research, change control, dashboard
+crates/rigor/          a facade re-exporting all of it; the binaries; the tests
 proofs/Rigor.lean
+research/              prior research this project builds on (drafts and red-team rounds)
+docs/research/         answers the system obtained itself, admitted through its own change control
+redteam/               the most recent independent attack reports
 ```
 
 ## The most important caveats

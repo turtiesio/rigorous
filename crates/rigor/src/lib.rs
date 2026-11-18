@@ -60,6 +60,7 @@
 //   adapters (host, git, chain, registry)   translate the outside world into typed events
 //   demo, steward            applications
 pub use rigor_adapter_chain as chain;
+pub use rigor_adapter_forge as forge;
 pub use rigor_adapter_git as gitlog;
 pub use rigor_adapter_host as adapters;
 pub use rigor_adapter_registry as registry;

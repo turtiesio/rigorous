@@ -115,7 +115,7 @@ fn incremental_assessment_equals_from_scratch() {
             by: BTreeSet::new(),
         };
         let env = Name::lit("env");
-        let _ = rt.inject(&env, Event::RulesChanged(Box::new(rc))).unwrap();
+        let _ = rt.inject_unchecked(rigor::kernel::Path::of(&env), Event::RulesChanged(Box::new(rc))).unwrap();
         let mut now = 0u64;
         for step in 0..60 {
             let epi = rt.leaf::<Epistemic>(&[EPI]).unwrap();
@@ -154,7 +154,7 @@ fn incremental_assessment_equals_from_scratch() {
                 now += 1;
                 Event::Tick(Time(now))
             };
-            let _ = rt.inject(&env, event).unwrap();
+            let _ = rt.inject_unchecked(rigor::kernel::Path::of(&env), event).unwrap();
             let epi = rt.leaf::<Epistemic>(&[EPI]).unwrap();
             for (prop, standing) in epi.full() {
                 assert_eq!(epi.standing(&prop), standing, "seed {seed} step {step} {prop}");
@@ -177,7 +177,7 @@ fn lifecycle() -> (Runtime<Event>, rigor::model::CommitmentId) {
         parent: None,
         terms: None,
     };
-    let _ = rt.inject(&Name::lit("env"), Event::Ok { by: D, via: CapId::Base(D), act: Act::Commit(offer) }).unwrap();
+    let _ = rt.inject_unchecked(rigor::kernel::Path::of(&Name::lit("env")), Event::Ok { by: D, via: CapId::Base(D), act: Act::Commit(offer) }).unwrap();
     let id = rt.leaf::<Norms>(&[NORMS]).unwrap().records().next().unwrap().commitment.id;
     (rt, id)
 }

@@ -62,7 +62,11 @@ fn checks(steward: &mut Steward, day: u64, force: bool, skip: &BTreeSet<Check>) 
             Outcome::CouldNotObserve => "could NOT be observed (tool missing?): nothing established",
             Outcome::Skipped => "skipped by request: nothing established",
         };
-        println!("  {:<18} {:<12} {what}", check.requirement().to_string(), format!("{:?}", steward.world.epi()?.assessment(&check.prop())));
+        println!(
+            "  {:<18} {:<12} {what}",
+            check.requirement().to_string(),
+            if steward.evidenced(*check)? { "evidenced".to_owned() } else { format!("NOT ({:?})", steward.world.epi()?.assessment(&check.prop())) }
+        );
     }
     let upkeep = steward.commitments(Tag::Upkeep)?;
     let count = |s: Status| upkeep.iter().filter(|(_, st)| *st == s).count();
@@ -74,6 +78,16 @@ fn write_dashboard(steward: &Steward, day: u64, report: &SelfReport) -> Result<P
     let path = steward.home().join("dashboard.html");
     std::fs::write(&path, steward.dashboard(day, report)?).map_err(|e| StewardError::Adapter(rigor::adapters::AdapterError::Io(e)))?;
     Ok(path)
+}
+
+fn print_review(said: Option<rigor::steward::research::Verdict>, id: &ChangeId) {
+    use rigor::steward::research::Verdict;
+    match said {
+        Some(Verdict::Accept) => println!("  reviewer: acknowledged"),
+        Some(Verdict::Reject) => println!("  reviewer: OBJECTS (see .rigor/changes/{id}.review.md)"),
+        Some(Verdict::Unclear) => println!("  reviewer: gave no usable verdict; nothing recorded for or against"),
+        None => println!("  reviewer: not consulted (out of budget)"),
+    }
 }
 
 fn change_id(text: Option<&String>) -> Option<ChangeId> {
@@ -94,6 +108,15 @@ fn main() -> Result<ExitCode, StewardError> {
     }
     if let Some(schema) = steward.migrated_from {
         println!("NOTE: the stored log was in schema {schema}; its chain was verified and its history migrated (old file kept)");
+    }
+    if let Some(problem) = steward.anchor_problem {
+        println!("ALARM: the record on disk does not meet its anchor (.rigor-anchor): {problem:?}.");
+        println!("       Its end may have been cut off, or it was rewritten. Nothing below can be relied on until this is");
+        println!("       looked into. If the record is right as it stands, the owner runs: steward reanchor");
+    }
+    if command == "reanchor" {
+        steward.owner_reanchors()?;
+        println!("re-anchored at {} events", steward.world.rt.log().next_seq());
     }
     if steward.refounded {
         println!("NOTE: the project was re-founded under its current constitution; its history was carried over (old file kept)");
@@ -134,17 +157,46 @@ fn main() -> Result<ExitCode, StewardError> {
                 Err(missing) => println!("NOT applied {id}: still missing {missing:?}"),
             }
         }
+        "review" => {
+            let Some(id) = change_id(args.get(1)) else {
+                println!("usage: steward review <change id>");
+                return Ok(ExitCode::from(2));
+            };
+            print_review(steward.review_change(&gateway, &id)?, &id);
+        }
+        "revise" => {
+            // Have the drafting model revise an existing research note to an instruction; the
+            // result is a change request like any other.
+            let (Some(path), Some(instruction)) = (args.get(1), args.get(2)) else {
+                println!("usage: steward revise <path of an existing research note> \"<what to change>\"");
+                return Ok(ExitCode::from(2));
+            };
+            match steward.draft_edit(&gateway, path, instruction)? {
+                None => println!("not drafted: out of budget"),
+                Some(request) => match steward.propose(&request)? {
+                    Ok(id) => {
+                        println!("CHANGE {id} proposed: {}", request.title);
+                        println!("  sandbox verification: {}", if steward.verify(&id)? { "passed" } else { "FAILED" });
+                        print_review(steward.review_change(&gateway, &id)?, &id);
+                        println!("  still missing before it can be applied: {:?}", steward.progress(&id)?.missing);
+                    }
+                    Err(refusal) => println!("change request refused: {refusal:?}"),
+                },
+            }
+        }
         "accept" => {
             let Some(name) = args.get(1).and_then(|s| Name::new(s).ok()) else {
                 println!("usage: steward accept <requirement>");
                 return Ok(ExitCode::from(2));
             };
-            steward.accept(Requirement(name), day)?;
+            if !steward.accept(Requirement(name.clone()), day)? {
+                println!("NOT accepted: '{name}' is not an undertaking on the roadmap (the project's claims about itself can only be evidenced by running their checks)");
+            }
         }
         _ => {}
     }
 
-    if !matches!(command, "ui" | "can") {
+    if !matches!(command, "ui" | "can" | "review" | "revise" | "approve" | "reject" | "apply" | "decide" | "grant-budget") {
         checks(&mut steward, day, has("--force"), &skip)?;
     }
     let mut report = steward.examine_itself(&gateway)?;
@@ -176,6 +228,10 @@ fn main() -> Result<ExitCode, StewardError> {
                     asked += 1;
                     println!("  {}: the reviewer still objects after {rounds} rounds; left open", q.id);
                 }
+                Researched::NoVerdict => {
+                    asked += 1;
+                    println!("  {}: the reviewer gave no usable verdict; left open", q.id);
+                }
                 Researched::OutOfBudget => {
                     println!("  {}: out of budget; stopped", q.id);
                     break;
@@ -196,16 +252,13 @@ fn main() -> Result<ExitCode, StewardError> {
                 reason: "Accepted research answers are kept with the project so that later decisions can cite them.".to_owned(),
                 proposed_by: RESEARCHER,
                 files,
+                edits: Vec::new(),
             };
             match steward.propose(&request)? {
                 Ok(id) => {
                     println!("\nCHANGE {id} proposed: {}", request.title);
                     println!("  sandbox verification: {}", if steward.verify(&id)? { "passed" } else { "FAILED" });
-                    match steward.review_change(&gateway, &id)? {
-                        Some(true) => println!("  reviewer: acknowledged"),
-                        Some(false) => println!("  reviewer: OBJECTS (see .rigor/changes/{id}.review.md)"),
-                        None => println!("  reviewer: not consulted (out of budget)"),
-                    }
+                    print_review(steward.review_change(&gateway, &id)?, &id);
                     println!("  still missing before it can be applied: {:?}", steward.progress(&id)?.missing);
                 }
                 Err(refusal) => println!("\nchange request refused: {refusal:?}"),

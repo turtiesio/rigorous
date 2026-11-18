@@ -51,7 +51,8 @@ impl Envoy {
     /// # Errors
     /// Never for a well-formed id; names are validated like any other.
     pub fn task_for(outer: CommitmentId) -> Result<Task, rigor_kernel::NameError> {
-        Ok(Task::whole(TaskName(Name::new(&outer.to_string())?)))
+        // The whole digest, not its shortened display form: two duties must not share a task.
+        Ok(Task::whole(TaskName(Name::new(&format!("job-{:016x}", outer.0 .0))?)))
     }
 }
 
@@ -82,7 +83,9 @@ impl Leaf<Event> for Envoy {
                 _ => {}
             },
             // An inner member has undertaken one of the jobs, to the envoy.
-            Event::NormCreated(c) if c.terms.creditor == self.me => {
+            // Only the member the work was given to can take it on: nobody else inside can speak
+            // for the job by committing to it and walking away.
+            Event::NormCreated(c) if c.terms.creditor == self.me && c.terms.debtor == self.worker => {
                 if let Condition::Holds(Prop::Done(task)) = &c.terms.cons {
                     if self.jobs.contains_key(task) {
                         let _ = self.inner.insert(c.id, task.clone());

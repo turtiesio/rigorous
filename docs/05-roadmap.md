@@ -52,17 +52,47 @@ now stand in its log as satisfied commitments.
 | The scheduler is now inside the proved model | Lean `sim_drive`, `drive_assoc` |
 | A vocabulary change can no longer silently orphan a stored log | `changing_the_vocabulary_without_bumping_the_schema_fails_here` |
 
+## Closed in the "stand on its own" round
+
+| What | Evidence |
+|---|---|
+| Core separated from adapters: kernel, logic and institution know no I/O; five adapter crates; the dependency direction is enforced by Cargo | workspace layout; all tests pass through the facade |
+| Language models in the loop through a gateway, as members whose word is a claim | `crates/mind`; `07-running-itself.md` |
+| A typed account of what it can and cannot do, and what each ability needs, probed for real | P33 |
+| A budget for model calls enforced by its own ledger | P34 |
+| Controlled change, including editing existing files (the system's own second recommendation) | P35 |
+| Research under its own rules: six questions answered, with the reviewer rejecting four first drafts | R9; `docs/research/` |
+| A dashboard, ordered by the system's own research on what an operator must see | P37; U25 |
+| Forge reviews at scale from the public archive, with real retraction | R8, P39 |
+| The runtime tested against a transcription of the proved model (the cheap form of its own first recommendation) | P38 |
+| Two fresh independent red-team reviews commissioned | `redteam/` |
+
 ## Address next (ordered; each is a steward commitment with a review-by day)
 
 | # | Item | What is wrong today | Done when | Review within |
 |---|---|---|---|---|
-| 1 | **Open the vocabulary by type parameters** (U16) | Three adapters each added variants to shared enums | Units are generic in `Prop`/`Tag`/`Pred`; each domain brings its own | 90 days |
-| 2 | **Forge reviews at scale** | 52 pull requests through one review mechanism | An authenticated crawl of a whole project's reviews and check runs | 90 days |
-| 3 | **A human in the loop for the reflector** | Its proposals were approved automatically in the stress runs | Proposals wait for, and record, a person's decision; rejected proposals feed back into its thresholds | 90 days |
-| 4 | **Verify the kernel against the Lean model** (U1) | The model now includes the scheduler, but nothing proves the Rust code realises it | T1-T9 proved of the Rust `Par`/`Runtime` | 180 days |
+| 1 | **Checks that cover documents** | Every documentation change passes verification trivially (N22); a destructive edit got through (N20) | At least: links resolve, numbers quoted in docs match the tests and measurements they cite | 45 days |
+| 2 | **Controlled changes to code, not only notes** (U24) | The change pipeline cannot touch what matters most. The system's own research ranks this second | A code change goes proposed, sandbox-verified, reviewed, approved, applied, with the diff applied equal to the diff verified | 60 days |
+| 3 | **Capabilities, prohibitions and lacks as distinct records** | They are one list with kinds; a prohibition is not stamped with who imposed it and what lifts it | The self-model follows `docs/research/how-a-system-should-know-its-limits.md` | 60 days |
+| 4 | **A human in the loop for the reflector** | Its proposals were approved automatically in the stress runs | Proposals wait for, and record, a person's decision | 90 days |
+| 5 | **Open the vocabulary by type parameters** (U16) | Five adapters each added variants to shared enums | Units generic in `Prop`/`Tag`/`Pred` | 90 days |
+| 6 | **Verify the kernel against the Lean model** (U1) | Tested against a transcription (P38), not proved. The system's own research ranks this first | T1-T9 proved of the Rust `Par`/`Runtime` with a Rust verifier | 180 days |
 
-Items 1 and 4 are large and are deliberately not attempted piecemeal: a partial version of either would add
-risk to the trusted base without removing an assumption.
+Items 5 and 6 are large and are deliberately not attempted piecemeal.
+
+## From the prior research (`research/`)
+
+The earlier investigation ended with a method and three concrete results. What this project has taken, and
+what it has not yet:
+
+| From the prior research | Status here |
+|---|---|
+| Method: executable models with cases first, reviewed after; two independent reviewers of different model families | Adopted throughout: every claim has a test; two fresh red teams (Astra, Fable) were commissioned on this code |
+| "Every claim of the form *this problem no longer arises* was wrong" | Adopted as a rule of the ledger: limits are listed as open until a test or a measurement closes them |
+| A verdict rule that apportions a missed deadline among the links of a delegation chain by each link's own lateness | **Not yet taken.** The adjudicator here finds who is accountable, culpable and liable, but does not apportion amounts. Deferred until a case needs shares |
+| A ledger rule for a spending cap that changes between rule versions (reserved rights, leases) | **Not yet taken.** Budgets here are fixed limits on a capability; a cap cannot yet be amended while rights are outstanding |
+| The norm layer in an established institutional action language (InstAL), needing an answer-set solver | **Not taken, deliberately.** Norms here are commitments with rule templates, and responsibility is sorted Datalog. The trade is stated in `01-prior-art.md` |
+| The finding that the contribution is the *contract between* known pieces, not a new foundation | Agreed, and it is how `01-prior-art.md` describes this work |
 
 ## Deferred (worth doing; not blocking; each with the trigger that would promote it)
 

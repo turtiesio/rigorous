@@ -11,7 +11,7 @@ Every claim this repository makes, with how it is supported. Six statuses, kept 
 - **Assumed** — taken on trust from outside the system.
 - **Unresolved** — not established here.
 
-Run `cargo test` (72 tests, 8 doctests), `cargo clippy --all-targets` and `lean proofs/Rigor.lean` — or
+Run `cargo test` (82 tests, 8 doctests), `cargo clippy --all-targets` and `lean proofs/Rigor.lean` — or
 `cargo run --bin steward`, which runs all of them and records the evidence.
 
 ## 1. Proved (about the model)
@@ -104,6 +104,13 @@ rejected on the way in.
 | P30 | **A real package registry**: 3,679 real releases (282 yanked): the fit set equals an independent oracle; releases resting on a yanked one lose support; revision work stays local | fixture in the repository | `a_real_registry_with_yanks_agrees_with_the_oracle` |
 | P31 | **Real forge reviews**: approvals support, standing change-requests rebut; objected changes are not accepted | 935 real commits, 52 real pull requests | `real_pull_request_reviews_enter_as_evidence_for_and_against` |
 | P32 | **Two institutions interacting**: an outer duty becomes inner work; the inner result crosses only as a claim; inner evidence and identities do not cross; each institution judges at its own level | constructed | `federation::a_duty_laid_on_an_organisation_...`, `federation::each_institution_judges_at_its_own_level_...` |
+| P33 | **It knows what it cannot do**: each ability's needs are probed for real; what is lacking is named; its account of itself is recorded as evidence and revised when the facts or the owner's decisions change; re-examining with nothing changed adds nothing | constructed repository, no credential | `it_knows_what_it_cannot_do_and_exactly_what_is_lacking` |
+| P34 | **The model budget is enforced by the institution's own ledger**: nothing is spent before the owner grants a budget, nothing beyond it, and neither the service account nor a model can take or grant one | constructed | `the_model_budget_is_enforced_by_the_institutions_own_ledger` |
+| P35 | **Controlled change**: applied only when verified by every check, approved by the owner and assessed sound; the proposer's word counts for nothing; a failed verification and the owner's rejection are never outweighed; what is applied is exactly what was verified; an edit applies only to the content it was written against and may not discard most of a file; code and proofs are out of reach | constructed repository, checks injected | five tests in `crates/rigor/tests/office.rs` |
+| P36 | A project founded under an older constitution is re-founded with its history, in the open | constructed | `a_project_founded_under_an_older_constitution_is_refounded_with_its_history` |
+| P37 | The dashboard puts what needs the owner first and escapes outside text | constructed | `the_dashboard_puts_what_needs_the_owner_first` |
+| P38 | **The runtime agrees with a transcription of the proved model**: 400 random triples of units driven by the real kernel and by a line-by-line transcription of the Lean `Unit`/`par`/`drive` give identical logs, including when cut off by fuel | random step tables | `the_runtime_agrees_with_a_transcription_of_the_proved_model` |
+| P39 | **Real forge reviews at scale, with retraction**: 6,000 real happenings; superseded and dismissed reviews are withdrawn; every assessment equals the oracle | fixture in the repository | `real_forge_reviews_with_superseded_and_dismissed_reviews_agree_with_the_oracle` |
 | P23 | Every existing judgment a stimulus changes lies inside the static cone of the change (closes U3) | 360 random cases, over 100 non-trivial | `exact_impact_always_lies_inside_the_static_cone` |
 
 ## 3a. Measured on external data (reproducible with network access; not part of `cargo test`)
@@ -116,6 +123,8 @@ rejected on the way in.
 | R4 | Three histories as separately bounded organisations in one world conclude what the oracle says; with compaction the run holds 32,287 of 4,303,196 entries and peaks at 1.28 GB | one hash chain, verified stretch by stretch | `stress --federate-only` |
 | R5 | Real transfers: 3,101 real Bitcoin transactions settled with no wrongful refusal, 3,015 of 3,015 replays and off-purpose uses refused, every budget spent exactly, balances equal to bookkeeping | 86 blocks, 7,895 accounts | `stress --chain`; also P24 |
 | R7 | A real package registry: of 12,844 releases never yanked, 308 are not held fit because they rest on a yanked release; the fit set equals an independent oracle | 397 crates, 13,754 releases, 910 yanks | `stress --registry`; also P30 |
+| R8 | A week of a forge's public event archive: every reviewed change's assessment equals an independent oracle; nothing refused | 169 hourly files; 212,434 happenings; 68,522 people admitted; 12,676 approvals, 2,173 change requests, 1,581 dismissals, 743 reviews withdrawn; 15,419 reviewed changes; 1,976,364 events | `stress --forge`; also P39 |
+| R9 | The system ran itself with two real models through a gateway: 6 research questions answered and accepted (4 only after a rejected first draft), 4 change requests proposed, of which the owner rejected 3 and 3 were applied; total spend about 2 cents of a 60-cent budget | 2026-11-18 | `cargo run --bin steward -- cycle`; `.rigor/`; `07-running-itself.md` |
 | R6 | The steward, on this repository: caught and recorded a lint failure; re-ran only what had changed; migrated its own log across two schema changes, the second a real change of event shape; and holds six roadmap items as closed on the project's acceptance | 2026-11-18 | `cargo run --bin steward`; `.rigor/` |
 
 **No longer reproducible.** An earlier Python prototype of the same semantics was kept alongside the Rust
@@ -137,6 +146,8 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 | A-UNIT | Each unit's transition function is deterministic and touches only its own state | Replay, composition laws. State-locality is compiler-enforced (C10); purity is not: a unit could still read a clock or a file |
 | A-RULES | The rule set expresses what the institution means | Verdicts are sound for the rules, not for justice |
 | A-OBS | "Notified" means a message was delivered, not that anyone understood it | The `knew` finding |
+| A-MODEL | Language models are trusted for nothing: what one says becomes a claim or a proposal by the member that asked, and counts only if another trusted party acknowledges it. The reviewing model IS such a party for research answers and change reviews, so two models agreeing can be wrong together | Research answers; change reviews (not verification, not approval) |
+| A-OWNER | Acts recorded as the owner's were made by the owner or on their instruction. In the first session they were made by an assistant acting for the owner | Budgets, decisions, approvals |
 | A-SNAPSHOT | For a plain resume: the snapshot file is the state its log produces. For an attested resume: the auditor who replayed is trustworthy | Everything after a resume |
 | A-TCB | The kernel, reasoners, vocabulary and institutional units are correct (about 4,400 lines) | Everything not independently proved |
 | A-TOOLS | The Rust compiler, `serde`, `serde_json`, `sha2`, and the Lean kernel are correct | Everything marked compiler-enforced or proved |
@@ -145,7 +156,7 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 
 | Id | Open item |
 |---|---|
-| U1 | No proof connects the Lean model to the Rust code |
+| U1 | No proof connects the Lean model to the Rust code. A differential test against a transcription of the model does (P38), for `Par` and the scheduler only |
 | U2 | Termination of a cascade is not guaranteed for arbitrary units (only a fuel bound). Acyclic templates are *intended* to bound chains of secondary duties; that is not proved |
 | U3 | Soundness of the static impact cone is property-tested (P23), not proved |
 | U4 | Only the adjudicator waits for quiescence. Any other unit that reads several facts at once can still see a half-propagated state |
@@ -166,6 +177,8 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 | U20 | Backdated records get their period from arrival: a policy, not a model of event time versus record time |
 | U21 | Identity merging is only what the project's own mailmap says |
 | U22 | Three kinds of real record have been tried (version-control histories, a ledger window of 86 blocks, a registry of 397 packages). Each adapter is an interpretation, and each oracle was written by the same author |
+| U24 | The system changes only research notes and generated tests. It cannot change its own code, proofs or rules under control, and there is deliberately no way to apply anything without the owner |
+| U25 | The dashboard is a static page rewritten each run; it could not be rendered for inspection in this environment (the preview tool failed), so its appearance is unverified |
 | U23 | The reflector's thresholds are fixed parameters and it knows two kinds of improvement (a method's rank; the maintenance period). It shows that rules can be revised from the record, not that the revision is right. In the stress runs the project's approval was automatic |
 | U17 | In-memory state digests (used only by the model checker) rely on `std::hash`, which is not stable across compiler versions; they are never persisted or compared across builds |
 
@@ -190,6 +203,9 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 | N16 | **A version-control history does not contain the evidence of review.** 5% of Kubernetes commits show an independent acknowledgement in git metadata | git metadata only | `06-real-data.md` |
 | N17 | **Real records are not well-formed.** 11% of declared reverts cannot be resolved to one earlier commit; 578 commits have clocks behind ones already seen | three histories | `06-real-data.md` |
 | N19 | **Revising evidence over the whole connected component does not scale** when derivation connects everything: 297 s for a real registry of 13,754 releases. Revision is now downstream-local (1 s); the from-scratch reference is kept and still agrees | real registry | `06-real-data.md` |
+| N20 | **A reviewer model and the checks both passed a destructive edit.** A model asked to revise a document returned only the changed paragraph; the edit would have replaced the file with one line. Caught by the owner's inspection; now refused structurally | first day of real use | `07-running-itself.md` |
+| N21 | **Two models agreeing is not evidence of correctness.** The research reviewer accepted an answer whose change request the same model, asked as a change reviewer, then rejected for over-claiming | first day of real use | `docs/research/README.md` |
+| N22 | **The project's checks do not cover what its documents say.** Every documentation change passes verification trivially | by construction | on the roadmap |
 | N18 | **A vocabulary change silently orphaned a stored log.** Adding fields to events made the steward's own log unparseable; it set the log aside and began a new one, losing its record of closed items. Found on the next run. Fixed by bumping the schema, writing the upgrade step, recovering the log by migration, and adding the guard test (P29) | this repository, 2026-11-18 | `.rigor/` |
 | N14 | **Nobody is outside the model.** When the service works, the scripted Alice never pays what she promised, and the same rules find her accountable and liable. Not a bug | scenario, working service | `working_service_everything_is_satisfied` |
 

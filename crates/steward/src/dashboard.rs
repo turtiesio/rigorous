@@ -64,7 +64,15 @@ impl Steward {
             asks.push(format!("The stored change request <code>{id}</code> does not match the identity it was recorded under (altered, or written by an older version). It cannot be verified or applied."));
         }
         for c in changes.iter().filter(|c| !c.applied && c.missing == vec![Missing::OwnersApproval]) {
-            asks.push(format!("Approve or reject the change <b>{}</b> (<code>{}</code>): it is verified and waits only for you.", esc(&c.title), c.id));
+            asks.push(format!(
+                "Approve or reject the change <b>{}</b> (<code>{}</code>): it is verified and waits only for you. It adds {} file(s), edits {}; {} line(s) removed, {} new.",
+                esc(&c.title),
+                c.id,
+                c.size.files_added,
+                c.size.files_edited,
+                c.size.lines_removed,
+                c.size.lines_new
+            ));
         }
         for c in changes.iter().filter(|c| {
             !c.applied
@@ -84,7 +92,7 @@ impl Steward {
         }
         let _ = write!(h, "<h2>Needs you</h2>");
         if asks.is_empty() {
-            let _ = write!(h, "<div class=\"dim\">Nothing is waiting for the owner.</div>");
+            let _ = write!(h, "<div class=\"dim\">Nothing is waiting for the owner, as of day {day}.</div>");
         }
         for a in &asks {
             let _ = write!(h, "<div class=\"need\">{a}</div>");
@@ -92,11 +100,10 @@ impl Steward {
 
         // 2. Summary tiles.
         let (limit, spent) = self.budgets()?.iter().fold((0u64, 0u64), |(l, s), (_, lim, sp)| (l + lim, s + sp));
-        let holds = Check::ALL.iter().filter(|c| epi.assessment(&c.prop()) == Assessment::Accepted).count();
+        let holds = Check::ALL.iter().filter(|c| self.evidenced(**c).unwrap_or(false)).count();
         let can = about_itself.abilities.iter().filter(|(_, s)| !matches!(s, Standing::Cannot(_))).count();
         let questions = crate::research::agenda();
-        let answered =
-            questions.iter().filter(|q| crate::research::answered(&q.id).is_ok_and(|r| epi.assessment(&Prop::Conforms(r)) == Assessment::Accepted)).count();
+        let answered = questions.iter().filter(|q| epi.assessment(&crate::research::answered(&q.id)) == Assessment::Accepted).count();
         let _ = write!(h, "<h2>At a glance</h2><div class=\"grid\">");
         for (value, label) in [
             (format!("{holds} / {}", Check::ALL.len()), "claims about itself currently evidenced"),
@@ -109,14 +116,51 @@ impl Steward {
         }
         let _ = write!(h, "</div>");
 
-        // 3. Its claims about itself.
-        let _ = write!(h, "<h2>What it claims about itself, and whether the evidence is current</h2><table><tr><th>Claim</th><th>Assessment</th></tr>");
+        // 3. Its claims about itself: what was checked, by what means, and when. "Checks passed"
+        //    is never shown as "this is correct", and no evidence looks different from evidence against.
+        let _ = write!(h, "<h2>What it claims about itself</h2><table><tr><th>Claim</th><th>Standing</th><th>By what means</th><th>Evidence from</th></tr>");
         for c in Check::ALL {
-            let a = epi.assessment(&c.prop());
-            let class = if a == Assessment::Accepted { "ok" } else { "bad" };
-            let _ = write!(h, "<tr><td>{}</td><td class=\"{class}\">{a:?}</td></tr>", c.requirement());
+            let standing = epi.standing(&c.prop());
+            let (class, word) = wording(standing.assessment);
+            let means: Vec<String> = epi.evidence().filter(|e| standing.basis.contains(&e.id)).map(|e| format!("{:?} by {}", e.method, e.source)).collect();
+            let from = standing
+                .since
+                .map_or_else(|| "&ndash;".to_owned(), |t| if t.0 == day { "today".to_owned() } else { format!("{} days ago", day.saturating_sub(t.0)) });
+            let _ = write!(
+                h,
+                "<tr><td>{}</td><td class=\"{class}\">{word}</td><td>{}</td><td>{from}</td></tr>",
+                c.requirement(),
+                if means.is_empty() { "&ndash;".to_owned() } else { means.join(", ") }
+            );
         }
-        let _ = write!(h, "</table>");
+        let _ = write!(h, "</table><div class=\"sub\">A real check that passed is evidence that the check passed, not that the thing is correct.</div>");
+
+        // 3a. Work stalled by one of its own limits.
+        let _ = write!(h, "<h2>Stalled by its own limits</h2>");
+        let open_questions = questions.len() - answered;
+        let mut stalled = Vec::new();
+        if open_questions > 0 {
+            if let Some(Standing::Cannot(lacking)) = about_itself.standing(crate::selfmodel::Ability::Research) {
+                stalled.push(format!(
+                    "{open_questions} research question(s) are open and it cannot research: lacking {}",
+                    lacking.iter().map(|n| esc(&describe_need(n))).collect::<Vec<_>>().join("; ")
+                ));
+            }
+        }
+        if changes.iter().any(|c| !c.applied && c.missing.contains(&Missing::PassingVerification)) {
+            if let Some(Standing::Cannot(lacking)) = about_itself.standing(crate::selfmodel::Ability::VerifyChanges) {
+                stalled.push(format!(
+                    "change request(s) await verification and it cannot verify: lacking {}",
+                    lacking.iter().map(|n| esc(&describe_need(n))).collect::<Vec<_>>().join("; ")
+                ));
+            }
+        }
+        if stalled.is_empty() {
+            let _ = write!(h, "<div class=\"dim\">No work is stalled by something it cannot do.</div>");
+        }
+        for s in &stalled {
+            let _ = write!(h, "<div class=\"need\">{s}</div>");
+        }
 
         // 4. What it can and cannot do.
         let _ =
@@ -158,8 +202,9 @@ impl Steward {
         // 6. Research.
         let _ = write!(h, "<h2>Research agenda</h2><table><tr><th>Question</th><th>State</th></tr>");
         for q in &questions {
-            let state = crate::research::answered(&q.id).map(|r| epi.assessment(&Prop::Conforms(r))).unwrap_or(Assessment::Unsupported);
-            let (class, word) = if state == Assessment::Accepted { ("ok", "answered, reviewed and accepted") } else { ("dim", "open") };
+            let state = epi.assessment(&crate::research::answered(&q.id));
+            let (class, word) =
+                if state == Assessment::Accepted { ("ok", "answered; accepted on a second model's review (weaker than a check)") } else { ("dim", "open") };
             let _ = write!(
                 h,
                 "<tr><td>{}<div class=\"dim\">{}</div></td><td class=\"{class}\">{word}</td></tr>",
@@ -197,7 +242,7 @@ impl Steward {
         );
 
         // 8. Recent activity.
-        let _ = write!(h, "<h2>Most recent acts</h2><table><tr><th>#</th><th>Who</th><th>What</th></tr>");
+        let _ = write!(h, "<h2>Most recent acts</h2><table><tr><th>#</th><th>Who</th><th>On whose authority</th><th>What</th></tr>");
         let recent: Vec<_> = self
             .world
             .rt
@@ -215,10 +260,21 @@ impl Steward {
                 Event::Delegated(c) => (OWNER.to_string(), format!("delegated to {}", c.holder)),
                 _ => continue,
             };
-            let _ = write!(h, "<tr><td class=\"dim\">{}</td><td>{who}</td><td>{what}</td></tr>", e.seq);
+            let authority = if who == OWNER.to_string() { "<b>the owner's decision</b>" } else { "its own" };
+            let _ = write!(h, "<tr><td class=\"dim\">{}</td><td>{who}</td><td>{authority}</td><td>{what}</td></tr>", e.seq);
         }
         let _ = write!(h, "</table></body></html>");
         Ok(h)
+    }
+}
+
+/// How a standing is worded: no evidence must not look like evidence against.
+const fn wording(a: Assessment) -> (&'static str, &'static str) {
+    match a {
+        Assessment::Accepted => ("ok", "evidenced"),
+        Assessment::Refuted => ("bad", "evidence against"),
+        Assessment::Contested => ("warn", "evidence both ways"),
+        Assessment::Unsupported => ("warn", "no current evidence"),
     }
 }
 
@@ -229,6 +285,7 @@ fn micro(n: u64) -> f64 {
 fn cond(c: &Condition) -> String {
     match c {
         Condition::Holds(Prop::Conforms(r)) | Condition::Unrefuted(Prop::Conforms(r)) => r.to_string(),
+        Condition::Holds(Prop::HeldOn { requirement, day }) => format!("{requirement} on day {day}"),
         Condition::Holds(p) | Condition::Unrefuted(p) => p.to_string(),
         Condition::Paid { at_least, .. } => format!("payment of at least {}", at_least.0),
     }

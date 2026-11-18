@@ -60,6 +60,19 @@ impl<E: Payload> Runtime<E> {
     /// # Errors
     /// See [`Fault`].
     pub fn inject_as(&mut self, actor: Path, event: E) -> Result<Vec<Entry<E>>, FaultOf<E>> {
+        if !event.may_come_from_outside() {
+            return Err(Fault::NotAStimulus(event.kind()));
+        }
+        self.inject_unchecked(actor, event)
+    }
+
+    /// Deliver any event as if it were a stimulus, WITHOUT checking that its kind may come from
+    /// outside. For harnesses that exercise one unit in isolation by feeding it what its
+    /// neighbours would have produced. Never use it at a boundary with the outside world.
+    ///
+    /// # Errors
+    /// See [`Fault`].
+    pub fn inject_unchecked(&mut self, actor: Path, event: E) -> Result<Vec<Entry<E>>, FaultOf<E>> {
         let start = self.log.entries().len();
         let settles = self.inputs.contains(&E::settle_kind());
         let kernel = Path::of(&Name::lit("kernel"));

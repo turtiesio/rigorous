@@ -6,11 +6,12 @@
 //!
 //! The mapping:
 //!
-//! * each release is attested fit by its publisher, derived from the attestations of the
-//!   releases its dependencies resolve to;
-//! * the publisher undertakes to the registry that the release is fit;
-//! * a yank is the publisher retracting its own attestation; everything derived from it loses
-//!   its support with it.
+//! * the publisher undertakes to the registry that each release is fit;
+//! * the registry records the release as listed: that record is the evidence of fitness,
+//!   derived from the records of the releases its dependencies resolve to. (The publisher's own
+//!   word would not count: it is the interested party.)
+//! * a yank is the registry withdrawing that record; everything derived from it loses its
+//!   support with it.
 //!
 //! Dependency resolution here is deliberately simple and is an INTERPRETATION: each
 //! requirement resolves to the highest known release it admits, yanked or not, so "fit" means
@@ -230,7 +231,7 @@ pub fn found() -> Result<World, Error> {
     let m = |id: ActorId, kind| Member { id, kind, principal: None, role: None };
     let mut rules = standard_rules(&Trusted { receipts: REGISTRY, probes: REGISTRY, tests: REGISTRY, audits: REGISTRY, acks: REGISTRY });
     rules.evidence.ranks = std::iter::once((Method::Receipt, Rank(1))).collect();
-    rules.evidence.trusted = std::iter::once((Method::Receipt, Trust::Anyone)).collect();
+    rules.evidence.trusted = std::iter::once((Method::Receipt, Trust::Only(std::iter::once(REGISTRY).collect()))).collect();
     let constitution = Constitution {
         members: vec![m(REGISTRY, MemberKind::Org), m(REGISTRAR, MemberKind::Service)],
         charters: vec![Charter { name: ADMISSIONS, holder: REGISTRAR, actions: std::iter::once(ActionKind::Admit).collect(), delegable: false }],
@@ -312,7 +313,7 @@ pub fn ingest(w: &mut World, all: &[Published]) -> Result<Stats, Error> {
             artifacts: BTreeMap::new(),
             content: Content::Note("published".to_owned()),
         };
-        let entries = w.act(&publisher, Act::Attest(a))?;
+        let entries = w.act(&REGISTRY, Act::Attest(a))?;
         match entries.iter().find_map(|e| match &e.event {
             Event::EvidenceRecorded(ev) => Some(ev.id),
             _ => None,
@@ -325,7 +326,7 @@ pub fn ingest(w: &mut World, all: &[Published]) -> Result<Stats, Error> {
     }
     for p in all.iter().filter(|p| p.yanked) {
         if let Some(id) = evidence.get(&p.release) {
-            let entries = w.act(&ActorId(p.release.package.clone()), Act::Retract { evidence: *id })?;
+            let entries = w.act(&REGISTRY, Act::Retract { evidence: *id })?;
             stats.refused += usize::from(!entries.iter().any(|e| matches!(e.event, Event::EvidenceRetracted { .. })));
         }
     }

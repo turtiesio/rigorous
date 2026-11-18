@@ -61,15 +61,21 @@ fn it_knows_what_it_cannot_do_and_exactly_what_is_lacking() {
 
     // Acting on itself without supervision needs the owner's explicit decision.
     let unsupervised = Requirement::lit("unsupervised-changes-allowed");
+    use rigor::steward::selfmodel::Unbuilt;
     let Some(Standing::Cannot(lacking)) = report.standing(Ability::ChangeItselfUnsupervised) else { panic!() };
-    assert_eq!(lacking, &vec![Need::OwnerSaysYes(unsupervised.clone())]);
+    assert_eq!(lacking, &vec![Need::OwnerSaysYes(unsupervised.clone()), Need::Unbuilt(Unbuilt::UnsupervisedApply)]);
+    // Even the owner's yes does not create the ability: there is deliberately no code path for it.
     s.owner_decides(unsupervised.clone(), true, 100).unwrap();
-    assert_eq!(s.examine_itself(&no_gateway()).unwrap().standing(Ability::ChangeItselfUnsupervised), Some(&Standing::Can));
-    assert_eq!(can(&s, Ability::ChangeItselfUnsupervised), Assessment::Accepted);
-    // The owner changes their mind: the ability is gone again, and the record is revised with it.
-    s.owner_decides(unsupervised, false, 101).unwrap();
-    assert!(matches!(s.examine_itself(&no_gateway()).unwrap().standing(Ability::ChangeItselfUnsupervised), Some(Standing::Cannot(_))));
+    assert_eq!(
+        s.examine_itself(&no_gateway()).unwrap().standing(Ability::ChangeItselfUnsupervised),
+        Some(&Standing::Cannot(vec![Need::Unbuilt(Unbuilt::UnsupervisedApply)]))
+    );
     assert_eq!(can(&s, Ability::ChangeItselfUnsupervised), Assessment::Refuted);
+    // A decision is recorded either way, and a need that depends on it follows the record.
+    let forge = Requirement::lit("use-the-owners-forge-credential");
+    s.owner_decides(forge.clone(), false, 101).unwrap();
+    assert_eq!(s.world.epi().unwrap().assessment(&Prop::Conforms(forge)), Assessment::Refuted);
+    let _ = unsupervised;
     // Examining again with nothing changed adds nothing to the record.
     let before = s.world.rt.log().next_seq();
     let _ = s.examine_itself(&no_gateway()).unwrap();
@@ -106,6 +112,7 @@ fn request(path: &str) -> ChangeRequest {
         reason: "to keep it".to_owned(),
         proposed_by: RESEARCHER,
         files: vec![NewFile { path: path.to_owned(), content: "a note\n".to_owned() }],
+        edits: Vec::new(),
     }
 }
 
@@ -201,7 +208,7 @@ fn what_is_applied_is_exactly_what_was_verified_and_approved() {
     s.owner_rules_on(&other, true).unwrap();
     std::fs::create_dir_all(root.join("docs/research")).unwrap();
     std::fs::write(root.join("docs/research/late.md"), "written by a person meanwhile").unwrap();
-    assert!(s.apply(&other).unwrap().is_err());
+    assert_eq!(s.apply(&other).unwrap(), Err(vec![Missing::StillFits]));
     assert_eq!(std::fs::read_to_string(root.join("docs/research/late.md")).unwrap(), "written by a person meanwhile");
     std::fs::remove_dir_all(root).unwrap();
 }
@@ -272,5 +279,79 @@ fn the_dashboard_puts_what_needs_the_owner_first() {
     let page = s.dashboard(100, &report).unwrap();
     assert!(!page.contains("<script>alert(1)</script>") && page.contains("&lt;script&gt;"));
     let _ = Name::lit("x");
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn an_existing_file_is_edited_only_against_the_content_the_edit_was_written_for() {
+    use rigor::kernel::digest_bytes;
+    use rigor::model::ContentDigest;
+    use rigor::steward::change::Edit;
+    let root = fake_repo("change-edit");
+    std::fs::create_dir_all(root.join("docs/research")).unwrap();
+    let note = root.join("docs/research/note.md");
+    std::fs::write(&note, "first version\n").unwrap();
+    let was = ContentDigest(digest_bytes(b"first version\n"));
+    // (A one-line file whose one line changes keeps nothing; the guard is about losing most of
+    // a file of some length, so the note used below has a line that stays.)
+    std::fs::write(&note, "title\nfirst version\n").unwrap();
+    let was = {
+        let _ = was;
+        ContentDigest(digest_bytes(b"title\nfirst version\n"))
+    };
+    let edit = |path: &str, was: ContentDigest| ChangeRequest {
+        title: "Revise the note".to_owned(),
+        reason: "it was wrong".to_owned(),
+        proposed_by: RESEARCHER,
+        files: Vec::new(),
+        edits: vec![Edit { path: path.to_owned(), was, content: "title\nsecond version\n".to_owned() }],
+    };
+    let mut s = open(&root, 100);
+    // Nothing the system proposes can touch the code or proofs it is trusted for.
+    assert_eq!(s.propose(&edit("crates/lib.rs", was)).unwrap(), Err(Refusal::OutsidePermittedPlaces("crates/lib.rs".to_owned())));
+    assert_eq!(s.propose(&edit("proofs/t.lean", was)).unwrap(), Err(Refusal::OutsidePermittedPlaces("proofs/t.lean".to_owned())));
+    assert_eq!(s.propose(&edit("docs/research/missing.md", was)).unwrap(), Err(Refusal::NothingToEdit("docs/research/missing.md".to_owned())));
+    assert_eq!(
+        s.propose(&edit("docs/research/note.md", ContentDigest(digest_bytes(b"something else")))).unwrap(),
+        Err(Refusal::Stale("docs/research/note.md".to_owned()))
+    );
+
+    // An "edit" that throws most of the file away is not a revision and is refused outright,
+    // whatever a reviewer or the owner might have thought of it. (Found in real use: a model
+    // returned only the paragraph it had changed, and both the checks and the reviewing model
+    // let the one-line replacement through.)
+    let long = (0..20).map(|i| format!("line {i}\n")).collect::<String>();
+    std::fs::write(root.join("docs/research/long.md"), &long).unwrap();
+    let gutted = ChangeRequest {
+        edits: vec![Edit {
+            path: "docs/research/long.md".to_owned(),
+            was: ContentDigest(digest_bytes(long.as_bytes())),
+            content: "line 3, reworded\n".to_owned(),
+        }],
+        ..edit("x", was)
+    };
+    assert_eq!(s.propose(&gutted).unwrap(), Err(Refusal::DiscardsMostOfTheFile { path: "docs/research/long.md".to_owned(), lines_before: 20, lines_kept: 0 }));
+    assert_eq!(rigor::steward::change::line_change("a\nb\nc\n", "a\nB\nc\nd\n"), (3, 2, 2));
+
+    let id = s.propose(&edit("docs/research/note.md", was)).unwrap().unwrap();
+    assert_eq!(s.progress(&id).unwrap().size, rigor::steward::change::Size { files_added: 0, files_edited: 1, lines_removed: 1, lines_new: 1 });
+    let mut sandboxed = String::new();
+    assert!(s
+        .verify_with(&id, |sandbox| {
+            sandboxed = std::fs::read_to_string(sandbox.join("docs/research/note.md")).unwrap();
+            all_pass(sandbox)
+        })
+        .unwrap());
+    assert_eq!(sandboxed, "title\nsecond version\n"); // the checks saw the edited file
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), "title\nfirst version\n"); // the real one is untouched
+    s.owner_rules_on(&id, true).unwrap();
+    // A person edits the file between approval and application: the change no longer fits, and is not forced.
+    std::fs::write(&note, "edited by a person meanwhile\n").unwrap();
+    assert_eq!(s.apply(&id).unwrap(), Err(vec![Missing::StillFits]));
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), "edited by a person meanwhile\n");
+    // Restored to what was verified, it applies.
+    std::fs::write(&note, "title\nfirst version\n").unwrap();
+    assert_eq!(s.apply(&id).unwrap(), Ok(()));
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), "title\nsecond version\n");
     std::fs::remove_dir_all(root).unwrap();
 }

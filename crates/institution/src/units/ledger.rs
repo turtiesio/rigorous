@@ -12,7 +12,8 @@ pub struct Ledger {
     founded: bool,
     accounts: BTreeSet<ActorId>,
     bal: BTreeMap<(ActorId, Resource), Amount>,
-    minted: BTreeMap<Resource, Amount>,
+    /// Total ever minted per resource, in a type wide enough for any sum of balances.
+    minted: BTreeMap<Resource, u128>,
 }
 
 impl Ledger {
@@ -24,12 +25,12 @@ impl Ledger {
     /// Invariant: for every resource, balances sum to what was minted at genesis.
     #[must_use]
     pub fn conserved(&self) -> bool {
-        let mut total: BTreeMap<&Resource, u64> = BTreeMap::new();
+        // Summed in a wider type: the check must not be able to hide a loss by saturating.
+        let mut total: BTreeMap<&Resource, u128> = BTreeMap::new();
         for ((_, r), n) in &self.bal {
-            let t = total.entry(r).or_default();
-            *t = t.saturating_add(n.0);
+            *total.entry(r).or_default() += u128::from(n.0);
         }
-        total.len() <= self.minted.len() && self.minted.iter().all(|(r, n)| total.get(r).copied().unwrap_or(0) == n.0)
+        total.len() <= self.minted.len() && self.minted.iter().all(|(r, n)| total.get(r).copied().unwrap_or(0) == *n)
     }
 }
 
@@ -50,10 +51,10 @@ impl Leaf<Event> for Ledger {
                 self.accounts.extend(c.members.iter().map(|m| m.id.clone()));
                 for (who, r, n) in &c.balances {
                     let _ = self.accounts.insert(who.clone());
+                    // A founding balance sheet that overflows an account is not one this ledger can keep.
                     let b = self.bal.entry((who.clone(), r.clone())).or_default();
-                    b.0 = b.0.saturating_add(n.0);
-                    let m = self.minted.entry(r.clone()).or_default();
-                    m.0 = m.0.saturating_add(n.0);
+                    b.0 = b.0.checked_add(n.0).ok_or(LeafError::Broken(crate::model::Failure::BalanceSheetOverflows))?;
+                    *self.minted.entry(r.clone()).or_default() += u128::from(n.0);
                 }
                 Ok(Vec::new())
             }
@@ -70,9 +71,14 @@ impl Leaf<Event> for Ledger {
                 let Some(rest) = have.0.checked_sub(t.amount.0) else {
                     return Ok(vec![fail(LedgerError::InsufficientFunds)]);
                 };
-                let _ = self.bal.insert((t.from.clone(), t.resource.clone()), Amount(rest));
-                let to = self.bal.entry((t.to.clone(), t.resource.clone())).or_default();
-                to.0 = to.0.saturating_add(t.amount.0);
+                // To oneself: nothing moves. Otherwise the credit must fit, or nothing is debited.
+                if t.from != t.to {
+                    let Some(more) = self.balance(&t.to, &t.resource).0.checked_add(t.amount.0) else {
+                        return Ok(vec![fail(LedgerError::Overflow)]);
+                    };
+                    let _ = self.bal.insert((t.from.clone(), t.resource.clone()), Amount(rest));
+                    let _ = self.bal.insert((t.to.clone(), t.resource.clone()), Amount(more));
+                }
                 Ok(vec![Event::Transferred { transfer: t.clone(), by: by.clone() }])
             }
             _ => Ok(Vec::new()),

@@ -57,6 +57,8 @@ pub struct Norms {
     due: BTreeMap<Time, BTreeSet<CommitmentId>>,
     roles: BTreeMap<Role, ActorId>,
     derived: BTreeMap<CommitmentId, BTreeMap<BasisKind, CommitmentId>>,
+    /// What has actually been transferred, by (from, to, resource).
+    paid: BTreeMap<(ActorId, ActorId, crate::model::Resource), u64>,
 }
 
 impl Default for Norms {
@@ -72,6 +74,7 @@ impl Default for Norms {
             due: BTreeMap::new(),
             roles: BTreeMap::new(),
             derived: BTreeMap::new(),
+            paid: BTreeMap::new(),
         }
     }
 }
@@ -183,9 +186,18 @@ impl Norms {
             out.push(reject(NormError::MaintenanceAsAntecedent));
             return Ok(None);
         }
-        if terms.parent.is_some_and(|p| !self.c.contains_key(&p)) {
-            out.push(reject(NormError::UnknownParent));
-            return Ok(None);
+        if let Some(parent) = terms.parent {
+            let Some(p) = self.c.get(&parent) else {
+                out.push(reject(NormError::UnknownParent));
+                return Ok(None);
+            };
+            // "In service of" is a relation between two parties: someone else takes on part of
+            // the parent's debtor's burden, and owes it to that debtor. A debtor cannot hang a
+            // commitment of its own making under its own, or under anyone else's.
+            if terms.creditor != p.terms().debtor || terms.debtor == p.terms().debtor {
+                out.push(reject(NormError::NotASubcontract));
+                return Ok(None);
+            }
         }
         let id = CommitmentId(digest_of(&terms)?);
         if self.c.contains_key(&id) {
@@ -229,8 +241,14 @@ impl Norms {
             ConsExpr::Remediated => Condition::Holds(Prop::Remediated(parent.commitment.id)),
             ConsExpr::Audited => Condition::Holds(Prop::Audited(parent.commitment.id)),
             ConsExpr::RefundOfPrice => {
+                // The terms are the debtor's own statement. What is refunded is what the record
+                // shows the payer actually paid the debtor, up to the stated price.
                 let x = p.terms.as_ref().ok_or(SkipReason::NoTerms)?;
-                Condition::Paid { from: debtor.clone(), to: x.payer.clone(), resource: x.resource.clone(), at_least: x.price }
+                let actually = self.paid.get(&(x.payer.clone(), p.debtor.clone(), x.resource.clone())).copied().unwrap_or(0).min(x.price.0);
+                if actually == 0 {
+                    return Err(SkipReason::NothingWasPaid);
+                }
+                Condition::Paid { from: debtor.clone(), to: x.payer.clone(), resource: x.resource.clone(), at_least: crate::model::Amount(actually) }
             }
         };
         Ok(CommitmentTerms {
@@ -273,7 +291,8 @@ impl Norms {
         let children: Vec<CommitmentId> = self.derived.get(&parent).into_iter().flatten().filter(|(k, _)| !keep(k)).map(|(_, c)| *c).collect();
         for child in children {
             if let Some(r) = self.c.get_mut(&child) {
-                if r.op.is_none() {
+                // Its basis is gone: whatever was done about it since (even its repudiation) is moot.
+                if matches!(r.op, None | Some(Op::Breach)) {
                     r.op = Some(Op::Void);
                     self.refresh(out, [child])?;
                 }
@@ -329,32 +348,48 @@ impl Norms {
 
     fn on_transfer(&mut self, out: &mut Vec<Event>, tr: &Transfer) -> Result<(), LeafError> {
         let now = self.now;
+        let paid = self.paid.entry((tr.from.clone(), tr.to.clone(), tr.resource.clone())).or_default();
+        *paid = paid.saturating_add(tr.amount.0);
         let hits = |cond: Option<&Condition>| match cond {
             Some(Condition::Paid { from, to, resource, at_least }) => tr.from == *from && tr.to == *to && tr.resource == *resource && tr.amount >= *at_least,
             Some(Condition::Holds(_) | Condition::Unrefuted(_)) | None => false,
         };
-        let mut hit = Vec::new();
-        let mut done = Vec::new();
+        // One payment settles one debt. If it says which (a refund names its commitment), that
+        // one; otherwise the oldest it could settle.
+        let named = match &tr.memo {
+            crate::model::Memo::Refund(c) => Some(*c),
+            crate::model::Memo::None | crate::model::Memo::Purpose(_) | crate::model::Memo::Payment(_) => None,
+        };
+        let mut candidates: Vec<(Time, CommitmentId, bool)> = Vec::new();
         for id in &self.watch {
-            let Some(r) = self.c.get_mut(id) else { continue };
-            let (ant, cons) = (r.commitment.terms.ant.clone(), r.commitment.terms.cons.clone());
-            if r.ant_at.is_none() && hits(ant.as_ref()) {
-                r.ant_at = Some(now);
-                hit.push(*id);
+            let Some(r) = self.c.get(id) else { continue };
+            if r.status.is_some_and(Status::absorbing) {
+                continue;
             }
-            if r.cons_at.is_none() && hits(Some(&cons)) {
+            if r.cons_at.is_none() && hits(Some(&r.commitment.terms.cons)) {
+                candidates.push((r.created_at, *id, true));
+            } else if r.ant_at.is_none() && hits(r.commitment.terms.ant.as_ref()) {
+                candidates.push((r.created_at, *id, false));
+            }
+        }
+        candidates.sort();
+        let chosen = match named {
+            Some(c) => candidates.iter().find(|(_, id, _)| *id == c).copied(),
+            None => candidates.first().copied(),
+        };
+        let Some((_, id, is_cons)) = chosen else { return Ok(()) };
+        if let Some(r) = self.c.get_mut(&id) {
+            if is_cons {
                 r.cons_at = Some(now);
-                hit.push(*id);
+            } else {
+                r.ant_at = Some(now);
             }
             let pending = |c: Option<&Condition>, at: Option<Time>| matches!(c, Some(Condition::Paid { .. })) && at.is_none();
-            if !pending(ant.as_ref(), r.ant_at) && !pending(Some(&cons), r.cons_at) {
-                done.push(*id);
+            if !pending(r.commitment.terms.ant.as_ref(), r.ant_at) && !pending(Some(&r.commitment.terms.cons), r.cons_at) {
+                let _ = self.watch.remove(&id);
             }
         }
-        for id in done {
-            let _ = self.watch.remove(&id);
-        }
-        self.refresh(out, hit)
+        self.refresh(out, [id])
     }
 
     fn operate(&mut self, out: &mut Vec<Event>, by: &ActorId, act: &Act) -> Result<(), LeafError> {
@@ -433,7 +468,12 @@ impl Leaf<Event> for Norms {
             }
             Event::Ok { by, act, .. } => self.operate(&mut out, by, act)?,
             Event::Assessed { prop, assessment, since, .. } => {
-                let _ = self.prop.insert(prop.clone(), (*assessment, *since, self.now));
+                // When this unit learned of the CURRENT assessment: unchanged if only its basis changed.
+                let learned = match self.prop.get(prop) {
+                    Some((was, _, at)) if was == assessment => *at,
+                    Some(_) | None => self.now,
+                };
+                let _ = self.prop.insert(prop.clone(), (*assessment, *since, learned));
                 self.refresh(&mut out, self.depending_on(prop))?;
             }
             Event::Verdict(v) => self.on_verdict(&mut out, v.commitment, &v.findings)?,

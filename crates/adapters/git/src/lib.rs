@@ -574,6 +574,8 @@ impl Ingest {
         let _ = self.seen.insert(c.id.clone(), c.author.id.clone());
         if self.approve_reflector {
             for id in std::mem::take(&mut self.pending) {
+                // Two holders of the power to approve; the reflector's proposing counts for nothing.
+                let _ = w.act_with(&REGISTRAR, &CapId::Charter(GOVERN_REGISTRAR), Act::Approve { id })?;
                 let entries = w.act_with(&PROJECT, &CapId::Charter(GOVERN_PROJECT), Act::Approve { id })?;
                 self.stats.reflector_proposals_approved += usize::from(entries.iter().any(|e| matches!(peel(&e.event), Event::RulesChanged(_))));
             }

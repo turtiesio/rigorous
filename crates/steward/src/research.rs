@@ -11,7 +11,7 @@
 
 use crate::selfmodel::SelfReport;
 use crate::{Steward, StewardError, CI, RESEARCHER, REVIEWER};
-use rigor_institution::model::{About, Act, Assessment, Attestation, Content, ContentDigest, Event, Method, Prop, Requirement};
+use rigor_institution::model::{About, Act, Assessment, Attestation, Content, ContentDigest, Event, Method, Prop};
 use rigor_kernel::{digest_bytes, Name};
 use rigor_mind::{Gateway, Model};
 use std::collections::{BTreeMap, BTreeSet};
@@ -37,6 +37,26 @@ pub fn agenda() -> Vec<Question> {
     ]
 }
 
+/// What a reviewer's reply says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Verdict {
+    Accept,
+    Reject,
+    /// The reply was empty or did not begin with a verdict. That is not an objection: it is
+    /// nothing, and nothing is recorded for it.
+    Unclear,
+}
+
+/// Read a reviewer's reply: its first non-empty line must begin with ACCEPT or REJECT.
+#[must_use]
+pub fn verdict(reply: &str) -> Verdict {
+    match reply.lines().map(str::trim).find(|l| !l.is_empty()) {
+        Some(l) if l.starts_with("ACCEPT") => Verdict::Accept,
+        Some(l) if l.starts_with("REJECT") => Verdict::Reject,
+        Some(_) | None => Verdict::Unclear,
+    }
+}
+
 /// What became of one round of research on a question.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -50,6 +70,8 @@ pub enum Outcome {
     NotAccepted {
         rounds: u8,
     },
+    /// The reviewer gave no usable verdict; nothing was recorded for or against.
+    NoVerdict,
     /// The budget ran out before the work was done.
     OutOfBudget,
 }
@@ -57,23 +79,21 @@ pub enum Outcome {
 const RESEARCHER_BRIEF: &str = "You are a careful researcher answering one question for the owner of a system that governs work. Answer in plain, direct prose with short headings and lists. Be concrete and specific; prefer established practice to novelty; say what you are unsure of. At most 450 words. Do not flatter and do not restate the question.";
 const REVIEWER_BRIEF: &str = "You are a strict independent reviewer. You are given a question and an answer written by someone else. Decide whether the answer is adequate: correct as far as you can tell, specific, and actually answering the question. Your FIRST line must be exactly ACCEPT or REJECT. Then give at most five short bullet points: the reasons, or the specific objections that would have to be met.";
 
-/// The requirement "this question has an accepted answer".
-///
-/// # Errors
-/// If the name would be too long.
-pub fn answered(question: &Name) -> Result<Requirement, StewardError> {
-    Ok(Requirement(Name::new(&format!("answered-{question}"))?))
+/// The proposition "this question has an accepted answer".
+#[must_use]
+pub fn answered(question: &Name) -> Prop {
+    Prop::Answered(question.clone())
 }
 
 impl Steward {
     /// Ask a model, and pay for it out of the budget. `None` if the budget cannot cover it.
-    fn consult(&mut self, gateway: &Gateway, model: Model, brief: &str, prompt: &str) -> Result<Option<String>, StewardError> {
+    pub(crate) fn consult(&mut self, gateway: &Gateway, model: Model, brief: &str, prompt: &str) -> Result<Option<String>, StewardError> {
         // Never start a consultation that the remaining budget could not pay for.
         const WORST_CASE: u64 = 30_000;
         if self.budget_left()? < WORST_CASE {
             return Ok(None);
         }
-        let reply = gateway.ask(model, brief, prompt, 1400)?;
+        let reply = gateway.ask(model, brief, prompt, 3000)?;
         // A reply that cannot be paid for is not used.
         Ok(self.pay(reply.micro_usd.max(1))?.then_some(reply.text))
     }
@@ -83,8 +103,30 @@ impl Steward {
     /// # Errors
     /// On a gateway failure, I/O failure or a kernel fault.
     pub fn research(&mut self, gateway: &Gateway, q: &Question, about_itself: &SelfReport) -> Result<Outcome, StewardError> {
-        let done = Prop::Conforms(answered(&q.id)?);
+        let done = answered(&q.id);
         if self.world.epi()?.assessment(&done) == Assessment::Accepted {
+            return Ok(Outcome::AlreadyAnswered);
+        }
+        // An answer already accepted on review, from which "answered" has not yet been drawn
+        // (for example in a record made before that inference had its present form): draw it,
+        // without consulting anyone again.
+        let standing: Vec<_> = self
+            .world
+            .epi()?
+            .standings()
+            .filter(|(p, s)| matches!(p, Prop::Answers { question, .. } if *question == q.id) && s.assessment == Assessment::Accepted)
+            .flat_map(|(_, s)| s.basis.clone())
+            .collect();
+        if !standing.is_empty() {
+            let derived = Attestation {
+                about: About::Supports(done),
+                method: Method::Inference,
+                derived_from: standing.into_iter().collect(),
+                artifacts: BTreeMap::new(),
+                content: Content::Note(format!("answer to {} already accepted on review", q.id)),
+            };
+            let _ = self.world.act(&CI, Act::Attest(derived))?;
+            self.persist()?;
             return Ok(Outcome::AlreadyAnswered);
         }
         let dir = self.home().join("research");
@@ -107,7 +149,14 @@ impl Steward {
                 return Ok(Outcome::OutOfBudget);
             };
             std::fs::write(dir.join(format!("{}.review-{round}.md", q.id)), &review).map_err(rigor_adapter_host::AdapterError::Io)?;
-            let accepted = review.lines().map(str::trim).find(|l| !l.is_empty()).is_some_and(|l| l.starts_with("ACCEPT"));
+            let accepted = match verdict(&review) {
+                Verdict::Accept => true,
+                Verdict::Reject => false,
+                Verdict::Unclear => {
+                    self.persist()?;
+                    return Ok(Outcome::NoVerdict);
+                }
+            };
             let about = if accepted { About::Supports(claim) } else { About::Rebuts(claim) };
             let a = Attestation {
                 about,

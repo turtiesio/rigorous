@@ -90,8 +90,10 @@ impl Governance {
         }
         let p = Proposal { amendments: amendments.to_vec(), base: self.version, approvals: BTreeSet::new(), stage: Stage::Open };
         let _ = self.proposals.insert(id, p);
+        // Proposing is not approving: the power to propose and the power to approve are distinct,
+        // and a quorum is counted only in approvals that came through the gate as approvals.
         out.push(Event::Proposed { id, by: by.clone(), base: self.version, paths });
-        self.approve(by, id, out)
+        Ok(())
     }
 
     fn approve(&mut self, by: &ActorId, id: ProposalId, out: &mut Vec<Event>) -> Result<(), LeafError> {
@@ -125,7 +127,7 @@ impl Leaf<Event> for Governance {
         GOV
     }
     fn inputs(&self) -> BTreeSet<Kind> {
-        [Kind::Genesis, Kind::Tick, Kind::Ok].into_iter().collect()
+        [Kind::Genesis, Kind::Tick, Kind::Ok, Kind::Expelled].into_iter().collect()
     }
     fn outputs(&self) -> BTreeSet<Kind> {
         [Kind::RulesChanged, Kind::Proposed, Kind::Approved, Kind::GovRejected].into_iter().collect()
@@ -149,6 +151,12 @@ impl Leaf<Event> for Governance {
                     RulePath::Entrenched,
                 ];
                 out.push(self.enact(c.rules.clone(), all.into_iter().collect(), BTreeSet::new())?);
+            }
+            // An expelled member's approvals of proposals still open no longer count.
+            Event::Expelled { member } => {
+                for p in self.proposals.values_mut().filter(|p| p.stage == Stage::Open) {
+                    let _ = p.approvals.remove(member);
+                }
             }
             Event::Ok { by, act: Act::Propose { amendments }, .. } => self.propose(by, amendments, &mut out)?,
             Event::Ok { by, act: Act::Approve { id }, .. } => self.approve(by, *id, &mut out)?,

@@ -45,8 +45,10 @@ impl Program {
 pub enum Unbuilt {
     /// There is one log and one clock; nothing here is a step towards agreement between machines.
     ManyLogsOneTruth,
-    /// A change may add files; nothing yet edits or deletes an existing one under control.
-    EditingExistingFiles,
+    /// Changes can add and edit research notes and generated tests; nothing changes code, proofs or rules.
+    ChangingCodeUnderControl,
+    /// There is no code path that applies a change without the owner's approval.
+    UnsupervisedApply,
     /// Nothing reads a forge's pull requests wholesale.
     ForgeCrawl,
     /// No tool chain connects the Rust code to the Lean model.
@@ -79,6 +81,7 @@ pub enum Ability {
     CheckItself,
     CheckItsProofs,
     ReadHistories,
+    ReadPublicForgeArchives,
     ConsultModels,
     Research,
     ProposeChanges,
@@ -86,6 +89,7 @@ pub enum Ability {
     ApplyChanges,
     ChangeItselfUnsupervised,
     EditExistingFiles,
+    ChangeItsOwnCode,
     ProveCodeMatchesModel,
     ReadAForgeAtScale,
     RunAcrossMachines,
@@ -93,10 +97,11 @@ pub enum Ability {
 }
 
 impl Ability {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 16] = [
         Self::CheckItself,
         Self::CheckItsProofs,
         Self::ReadHistories,
+        Self::ReadPublicForgeArchives,
         Self::ConsultModels,
         Self::Research,
         Self::ProposeChanges,
@@ -104,6 +109,7 @@ impl Ability {
         Self::ApplyChanges,
         Self::ChangeItselfUnsupervised,
         Self::EditExistingFiles,
+        Self::ChangeItsOwnCode,
         Self::ProveCodeMatchesModel,
         Self::ReadAForgeAtScale,
         Self::RunAcrossMachines,
@@ -117,6 +123,7 @@ impl Ability {
             Self::CheckItself => "check-itself",
             Self::CheckItsProofs => "check-its-proofs",
             Self::ReadHistories => "read-histories",
+            Self::ReadPublicForgeArchives => "read-public-forge-archives",
             Self::ConsultModels => "consult-models",
             Self::Research => "research",
             Self::ProposeChanges => "propose-changes",
@@ -124,6 +131,7 @@ impl Ability {
             Self::ApplyChanges => "apply-changes",
             Self::ChangeItselfUnsupervised => "change-itself-unsupervised",
             Self::EditExistingFiles => "edit-existing-files",
+            Self::ChangeItsOwnCode => "change-its-own-code",
             Self::ProveCodeMatchesModel => "prove-code-matches-model",
             Self::ReadAForgeAtScale => "read-a-forge-at-scale",
             Self::RunAcrossMachines => "run-across-machines",
@@ -138,15 +146,17 @@ impl Ability {
             Self::CheckItself => "Run its own tests, lints and format check, and record the evidence",
             Self::CheckItsProofs => "Re-check the machine proofs about its model",
             Self::ReadHistories => "Read version-control histories as records of what people did",
+            Self::ReadPublicForgeArchives => "Read pull requests and reviews from a forge's public event archive, needing no credential",
             Self::ConsultModels => "Ask language models, within the owner's budget",
             Self::Research => "Put a question to one model, have another review the answer, and record both",
             Self::ProposeChanges => "Draft a change to the things it manages, as a request",
             Self::VerifyChanges => "Try a proposed change in a sandbox and record whether the checks still pass",
             Self::ApplyChanges => "Apply a change that is verified and approved",
             Self::ChangeItselfUnsupervised => "Apply changes to itself without the owner's approval",
-            Self::EditExistingFiles => "Change or delete existing files under the same control as additions",
+            Self::EditExistingFiles => "Replace the content of an existing research note or generated test, under the same control as additions",
+            Self::ChangeItsOwnCode => "Change the code, proofs or rules it is trusted for",
             Self::ProveCodeMatchesModel => "Prove that its code does what its proved model says",
-            Self::ReadAForgeAtScale => "Read all of a project's reviews and check runs from its forge",
+            Self::ReadAForgeAtScale => "Read ALL of one project's reviews and check runs from its forge, with a credential",
             Self::RunAcrossMachines => "Keep one consistent record across several machines",
             Self::EstablishTruth => "Establish that a claim is true, as opposed to assessing the evidence for it",
         }
@@ -160,13 +170,19 @@ impl Ability {
             Self::CheckItself => vec![Need::Program(Program::Cargo), Need::Program(Program::Clippy), Need::Program(Program::Rustfmt)],
             Self::CheckItsProofs => vec![Need::Program(Program::Lean)],
             Self::ReadHistories => vec![Need::Program(Program::Git)],
+            Self::ReadPublicForgeArchives => Vec::new(),
             Self::ConsultModels => vec![Credential, GatewayAnswers, Need::Budget],
             Self::Research => vec![Need::Ability(Self::ConsultModels)],
             Self::ProposeChanges => vec![Need::Ability(Self::ConsultModels)],
             Self::VerifyChanges => vec![Need::Ability(Self::CheckItself)],
             Self::ApplyChanges => vec![Need::Ability(Self::VerifyChanges), OwnerApprovesEach],
-            Self::ChangeItselfUnsupervised => vec![Need::Ability(Self::VerifyChanges), OwnerSaysYes(Requirement::lit("unsupervised-changes-allowed"))],
-            Self::EditExistingFiles => vec![Need::Unbuilt(Unbuilt::EditingExistingFiles)],
+            Self::ChangeItselfUnsupervised => vec![
+                Need::Ability(Self::VerifyChanges),
+                OwnerSaysYes(Requirement::lit("unsupervised-changes-allowed")),
+                Need::Unbuilt(Unbuilt::UnsupervisedApply),
+            ],
+            Self::EditExistingFiles => vec![Need::Ability(Self::VerifyChanges), OwnerApprovesEach],
+            Self::ChangeItsOwnCode => vec![Need::Unbuilt(Unbuilt::ChangingCodeUnderControl)],
             Self::ProveCodeMatchesModel => vec![Need::Program(Program::RustVerifier), Need::Unbuilt(Unbuilt::CodeToModelProof)],
             Self::ReadAForgeAtScale => vec![OwnerSaysYes(Requirement::lit("use-the-owners-forge-credential")), Need::Unbuilt(Unbuilt::ForgeCrawl)],
             Self::RunAcrossMachines => vec![Need::Unbuilt(Unbuilt::ManyLogsOneTruth)],
@@ -234,7 +250,10 @@ pub fn describe_need(n: &Need) -> String {
         Need::Ability(a) => format!("the ability '{}'", a.name()),
         Need::Unbuilt(u) => match u {
             Unbuilt::ManyLogsOneTruth => "agreement between machines on one order of events (not built)".to_owned(),
-            Unbuilt::EditingExistingFiles => "controlled editing of existing files (not built: changes can only add files)".to_owned(),
+            Unbuilt::ChangingCodeUnderControl => {
+                "a controlled path for changing code, proofs or rules (not built: changes reach only research notes and generated tests)".to_owned()
+            }
+            Unbuilt::UnsupervisedApply => "any way to apply a change without the owner's approval (not built, deliberately)".to_owned(),
             Unbuilt::ForgeCrawl => "a crawler for a forge's reviews (not built)".to_owned(),
             Unbuilt::CodeToModelProof => "a proof connecting the code to the model (not built)".to_owned(),
         },

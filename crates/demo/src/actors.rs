@@ -170,20 +170,15 @@ impl Leaf<Event> for ServiceApi {
                 out.push(act(Act::Commit(Offer {
                     creditor: by.clone(),
                     ant: None,
-                    cons: Condition::Holds(prop.clone()),
+                    cons: Condition::Holds(prop),
                     deadline: r.deadline,
                     tags: [Tag::Paid, Tag::Service].into_iter().collect(),
                     parent: r.parent,
                     terms: r.terms.clone(),
                 })));
+                // It issues no evidence of its own about its own work: that would be the
+                // interested party vouching for itself.
                 out.push(Event::JobQueued(Job { task: r.task.clone(), client: by.clone() }));
-                out.push(act(Act::Attest(Attestation {
-                    about: About::Supports(prop),
-                    method: Method::Receipt,
-                    derived_from: BTreeSet::new(),
-                    artifacts: BTreeMap::new(),
-                    content: Content::Note("job accepted".to_owned()),
-                })));
             }
             Event::JobDone(j) => out.push(Event::Signal { to: j.client.clone(), prop: Prop::Done(j.task.clone()), value: true }),
             Event::JobFailed(j) => out.push(Event::Signal { to: j.client.clone(), prop: Prop::Done(j.task.clone()), value: !self.truthful }),

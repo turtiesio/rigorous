@@ -118,7 +118,7 @@ pub struct BacklogItem {
 /// The roadmap's "address next" list (docs/05-roadmap.md), as obligations. An item is
 /// undertaken the first time the steward runs with it in this list; items that were closed
 /// earlier stay in the log as satisfied commitments.
-pub const BACKLOG: [BacklogItem; 10] = [
+pub const BACKLOG: [BacklogItem; 14] = [
     BacklogItem { requirement: Requirement::lit("snapshots-are-attested-not-trusted"), review_within: 45 },
     BacklogItem { requirement: Requirement::lit("forge-review-evidence-adapter"), review_within: 60 },
     BacklogItem { requirement: Requirement::lit("real-data-for-transfers-and-budgets"), review_within: 60 },
@@ -129,6 +129,11 @@ pub const BACKLOG: [BacklogItem; 10] = [
     BacklogItem { requirement: Requirement::lit("forge-reviews-at-scale-not-a-sample"), review_within: 90 },
     BacklogItem { requirement: Requirement::lit("a-human-in-the-loop-for-reflector-proposals"), review_within: 90 },
     BacklogItem { requirement: Requirement::lit("kernel-verified-against-lean-model"), review_within: 180 },
+    // Recommended by the system's own research ("what-should-change-next") and adopted by the owner.
+    BacklogItem { requirement: Requirement::lit("controlled-editing-of-existing-files"), review_within: 30 },
+    BacklogItem { requirement: Requirement::lit("controlled-changes-to-code-not-only-notes"), review_within: 60 },
+    BacklogItem { requirement: Requirement::lit("capabilities-prohibitions-and-lacks-as-distinct-records"), review_within: 60 },
+    BacklogItem { requirement: Requirement::lit("checks-that-cover-documents-not-only-code"), review_within: 45 },
 ];
 
 /// Why the steward could not do its job (as opposed to finding the project wanting).
@@ -246,6 +251,26 @@ pub struct Steward {
     pub migrated_from: Option<u32>,
     /// Set when the stored log was founded under an older constitution and was re-founded.
     pub refounded: bool,
+    /// Set when the record on disk does not reach, or does not match, the point last anchored.
+    pub anchor_problem: Option<AnchorProblem>,
+}
+
+/// The last point of the record the steward wrote down outside the record itself
+/// (`.rigor-anchor` at the repository root, meant to be kept under version control). A log is
+/// self-consistent however much of its end is cut off; the anchor is what a cut is measured against.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Anchor {
+    pub events: u64,
+    pub head: rigor_kernel::Digest,
+}
+
+/// How the record fails to meet its anchor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AnchorProblem {
+    /// The record has fewer events than were anchored: its end is missing (or all of it).
+    Shorter { anchored: u64, found: u64 },
+    /// The record has a different event at the anchored position: it was rewritten.
+    Different,
 }
 
 impl Steward {
@@ -303,10 +328,34 @@ impl Steward {
         } else {
             world
         };
-        let rust =
-            [files_under(&root.join("crates"), &["rs", "toml"])?, vec![root.join("Cargo.toml"), root.join("Cargo.lock"), root.join("rustfmt.toml")]].concat();
+        // Measure the record against its anchor, unless it was just rebuilt in the open.
+        let anchor: Option<Anchor> = std::fs::read_to_string(root.join(".rigor-anchor")).ok().and_then(|t| serde_json::from_str(&t).ok());
+        let anchor_problem = match anchor {
+            Some(a) if migrated.is_none() && !refounded && rejected.is_none() => {
+                let found = world.rt.log().next_seq();
+                let at_anchor = a.events.checked_sub(1).and_then(|i| usize::try_from(i).ok()).and_then(|i| world.rt.log().entries().get(i));
+                if found < a.events {
+                    Some(AnchorProblem::Shorter { anchored: a.events, found })
+                } else if at_anchor.is_some_and(|e| e.id != a.head) {
+                    Some(AnchorProblem::Different)
+                } else {
+                    None
+                }
+            }
+            Some(_) | None => None,
+        };
+        let rust = [files_under(&root.join("crates"), &[])?, vec![root.join("Cargo.toml"), root.join("Cargo.lock"), root.join("rustfmt.toml")]].concat();
         let watcher = ArtifactWatcher::of_sets([(SOURCES, rust), (PROOFS, files_under(&root.join("proofs"), &["lean"])?)]);
-        Ok(Self { world, root: root.to_path_buf(), log: log.to_path_buf(), watcher, previous_log_rejected: rejected, migrated_from: migrated, refounded })
+        Ok(Self {
+            world,
+            root: root.to_path_buf(),
+            log: log.to_path_buf(),
+            watcher,
+            previous_log_rejected: rejected,
+            migrated_from: migrated,
+            refounded,
+            anchor_problem,
+        })
     }
 
     /// One pass: observe the files, undertake today's upkeep, run only the checks whose claims
@@ -335,21 +384,41 @@ impl Steward {
         let _ = self.watcher.scan(&mut self.world)?;
         let mut outcomes = Vec::new();
         for check in Check::ALL {
-            let prop = check.prop();
+            // Two propositions. "It conforms" is about the files as they are now: its evidence is
+            // bound to their digests and goes stale when they change. "It held on day d" is a
+            // fact about the past: nothing that happens later can make it stale, so a good day
+            // stays good and a bad day stays bad whatever is done to the files afterwards.
+            let now_prop = check.prop();
+            let day_prop = Prop::HeldOn { requirement: check.requirement(), day };
             // A duplicate (a second run on the same day) is refused by the norms unit; that is fine.
-            let _ = self.world.act(&MAINTAINER, Act::Commit(undertaking(prop.clone(), Time(day), Tag::Upkeep)))?;
+            let _ = self.world.act(&MAINTAINER, Act::Commit(undertaking(day_prop.clone(), Time(day), Tag::Upkeep)))?;
             let outcome = if skip.contains(&check) {
                 Outcome::Skipped
-            } else if !force && self.world.epi()?.assessment(&prop) == Assessment::Accepted {
+            } else if !force && self.evidenced(check)? {
                 Outcome::StillEvidenced
             } else {
-                match run_check(&mut self.world, &mut self.watcher, &mut check.command(&self.root), &prop, &[check.artifact()], &CI) {
+                match run_check(&mut self.world, &mut self.watcher, &mut check.command(&self.root), &now_prop, &[check.artifact()], &CI) {
                     Ok(true) => Outcome::RanAndPassed,
                     Ok(false) => Outcome::RanAndFailed,
                     Err(AdapterError::Io(_)) => Outcome::CouldNotObserve,
                     Err(e) => return Err(e.into()),
                 }
             };
+            // The day's fact: what a real check, on the files as they are now, shows as of this run.
+            if !matches!(outcome, Outcome::Skipped | Outcome::CouldNotObserve) {
+                use rigor_institution::model::About;
+                let holds = self.evidenced(check)?;
+                let recorded = self.world.epi()?.assessment(&day_prop);
+                if (recorded == Assessment::Accepted) != holds || recorded == Assessment::Unsupported {
+                    let on_it = self.world.epi()?.evidence_on(&day_prop);
+                    let mine: Vec<_> = self.world.epi()?.standing_evidence().filter(|e| on_it.contains(&e.id) && e.source == CI).map(|e| e.id).collect();
+                    for e in mine {
+                        let _ = self.world.act(&CI, Act::Retract { evidence: e })?;
+                    }
+                    let about = if holds { About::Supports(day_prop) } else { About::Rebuts(day_prop) };
+                    let _ = self.world.act(&CI, attest(about, Method::Test, &format!("as of this run on day {day}")))?;
+                }
+            }
             outcomes.push((check, outcome));
         }
         // A lapse is put right when the requirement that lapsed is evidenced again: say so, as
@@ -357,8 +426,14 @@ impl Steward {
         let mut put_right = Vec::new();
         for r in self.world.tagged(Tag::Remediation)? {
             let lapsed = r.terms().basis.as_ref().and_then(|b| self.world.norms().ok()?.record(&b.of).map(|x| x.terms().cons.clone()));
-            if let (Some(Condition::Holds(req)), Condition::Holds(remediated), Some(Status::Detached)) = (lapsed, &r.terms().cons, r.status) {
-                if self.world.epi()?.assessment(&req) == Assessment::Accepted {
+            let check = match lapsed {
+                Some(Condition::Holds(Prop::HeldOn { requirement, .. } | Prop::Conforms(requirement))) => {
+                    Check::ALL.into_iter().find(|c| c.requirement() == requirement)
+                }
+                _ => None,
+            };
+            if let (Some(check), Condition::Holds(remediated), Some(Status::Detached)) = (check, &r.terms().cons, r.status) {
+                if self.evidenced(check)? {
                     put_right.push(remediated.clone());
                 }
             }
@@ -374,12 +449,19 @@ impl Steward {
     ///
     /// # Errors
     /// On I/O failure or a kernel fault.
-    pub fn accept(&mut self, requirement: Requirement, day: u64) -> Result<(), StewardError> {
+    pub fn accept(&mut self, requirement: Requirement, day: u64) -> Result<bool, StewardError> {
+        // Only an undertaking on the roadmap can be accepted as done. The project's claims about
+        // itself cannot: for those the only evidence is a real run of the check.
+        let is_roadmap_item = self.world.tagged(Tag::Task)?.iter().any(|r| r.terms().cons == Condition::Holds(Prop::Conforms(requirement.clone())));
+        if !is_roadmap_item || Check::ALL.iter().any(|c| c.requirement() == requirement) {
+            return Ok(false);
+        }
         let _ = self.world.tick(day)?;
         let _ = self.world.act(&MAINTAINER, Act::Claim { prop: Prop::Conforms(requirement.clone()) })?;
         let _ =
             self.world.act(&PROJECT, attest(rigor_institution::model::About::Supports(Prop::Conforms(requirement)), Method::Ack, "accepted by the project"))?;
-        self.save()
+        self.save()?;
+        Ok(true)
     }
 
     /// The repository this steward looks after.
@@ -469,6 +551,15 @@ impl Steward {
         Ok(false)
     }
 
+    /// The owner accepts the record as it now is, after an anchor failure has been looked into.
+    ///
+    /// # Errors
+    /// On I/O failure.
+    pub fn owner_reanchors(&mut self) -> Result<(), StewardError> {
+        self.anchor_problem = None;
+        self.save()
+    }
+
     /// Persist the log.
     ///
     /// # Errors
@@ -481,16 +572,41 @@ impl Steward {
         if let Some(dir) = self.log.parent() {
             std::fs::create_dir_all(dir).map_err(AdapterError::Io)?;
         }
-        Ok(save(&self.world, &self.log)?)
+        save(&self.world, &self.log)?;
+        // The anchor follows the record -- except when the record has failed to meet it: then
+        // it is left as it is, so that the failure cannot be papered over by simply running again.
+        if self.anchor_problem.is_none() {
+            let anchor = Anchor { events: self.world.rt.log().next_seq(), head: self.world.rt.log().head() };
+            let text = serde_json::to_string(&anchor).map_err(|e| StewardError::Adapter(AdapterError::Snapshot(rigor_kernel::EncodingError(e.to_string()))))?;
+            std::fs::write(self.root.join(".rigor-anchor"), text).map_err(AdapterError::Io)?;
+        }
+        Ok(())
     }
 
-    /// Whether every self-claim that was not skipped is currently evidenced.
+    /// Whether a self-claim is currently evidenced THE ONLY WAY IT CAN BE: by a real run of its
+    /// check, by the service account, bound to the digest of the files as they now are.
+    /// Nobody's say-so counts, whatever their standing.
+    ///
+    /// # Errors
+    /// If the world lacks an institutional unit.
+    pub fn evidenced(&self, check: Check) -> Result<bool, StewardError> {
+        let epi = self.world.epi()?;
+        let standing = epi.standing(&check.prop());
+        Ok(standing.assessment == Assessment::Accepted
+            && epi.standing_evidence().any(|e| standing.basis.contains(&e.id) && e.source == CI && e.method == Method::Test && !e.artifacts.is_empty()))
+    }
+
+    /// Whether every self-claim that was not skipped is currently evidenced by a real check,
+    /// and the record reaches its anchor.
     ///
     /// # Errors
     /// If the world lacks an institutional unit.
     pub fn conformant(&self, skip: &BTreeSet<Check>) -> Result<bool, StewardError> {
-        let epi = self.world.epi()?;
-        Ok(Check::ALL.iter().filter(|c| !skip.contains(c)).all(|c| epi.assessment(&c.prop()) == Assessment::Accepted))
+        let mut all = self.anchor_problem.is_none();
+        for c in Check::ALL.into_iter().filter(|c| !skip.contains(c)) {
+            all = all && self.evidenced(c)?;
+        }
+        Ok(all)
     }
 
     /// Commitments carrying a tag, with their current status.

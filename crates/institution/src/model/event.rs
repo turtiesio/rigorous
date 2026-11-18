@@ -146,6 +146,14 @@ pub enum Prop {
     },
     /// The change has been applied to the thing it changes.
     Applied(ChangeId),
+    /// The named question has an answer that was accepted on review.
+    Answered(Name),
+    /// The requirement held on that day. A fact about the past: nothing that happens later to
+    /// the thing it was about makes it stale.
+    HeldOn {
+        requirement: Requirement,
+        day: u64,
+    },
     Fact(Name),
 }
 
@@ -163,7 +171,25 @@ impl fmt::Display for Prop {
             Self::Can(n) => write!(f, "can({n})"),
             Self::Answers { question, answer } => write!(f, "answers({question}, {answer})"),
             Self::Applied(c) => write!(f, "applied({c})"),
+            Self::Answered(q) => write!(f, "answered({q})"),
+            Self::HeldOn { requirement, day } => write!(f, "held({requirement}, day {day})"),
             Self::Fact(n) => write!(f, "fact({n})"),
+        }
+    }
+}
+
+impl Prop {
+    /// Whether this proposition may be INFERRED from evidence supporting `premise`. Inference is
+    /// only ever along these fixed lines; nothing else follows from anything.
+    ///
+    /// * a whole task is done, from a step of that same task being done;
+    /// * a question is answered, from a document being accepted as answering that question.
+    #[must_use]
+    pub fn follows_from(&self, premise: &Self) -> bool {
+        match (self, premise) {
+            (Self::Done(whole), Self::Done(part)) => whole.step.is_none() && part.step.is_some() && whole.name == part.name,
+            (Self::Answered(q), Self::Answers { question, .. }) => q == question,
+            _ => false,
         }
     }
 }
@@ -459,6 +485,8 @@ pub enum DenyReason {
 pub enum LedgerError {
     UnknownAccount,
     InsufficientFunds,
+    /// The receiving balance cannot hold the amount.
+    Overflow,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -479,6 +507,10 @@ pub enum EvidenceError {
     UnknownProvenance,
     /// An inference must cite what it is derived from.
     UngroundedInference,
+    /// An inference can only support a proposition: it cannot rebut one or undercut evidence.
+    InferenceMustSupport,
+    /// The conclusion does not follow from what the inference cites.
+    DoesNotFollow,
     Duplicate,
     /// Only the source may retract its evidence.
     NotTheSource,
@@ -530,6 +562,8 @@ pub struct Commitment {
 pub enum NormError {
     DeadlineInThePast,
     UnknownParent,
+    /// A commitment made "in service of" another must be made TO that other's debtor, by someone else.
+    NotASubcontract,
     /// A maintenance condition was used as an antecedent.
     MaintenanceAsAntecedent,
     Duplicate(CommitmentId),
@@ -544,6 +578,8 @@ pub enum SkipReason {
     NoHolderOfRole(Role),
     NoTerms,
     NoParty,
+    /// The terms name a price, but no such payment was ever made: there is nothing to refund.
+    NothingWasPaid,
 }
 
 /// Something a verdict's derivation took on trust.
@@ -597,6 +633,8 @@ pub enum Failure {
     InvalidConstitution(RulesError),
     /// Rules that were validated at enactment no longer check (a bug).
     EnactedRulesDoNotCheck(super::rules::RRuleError),
+    /// The founding balances do not fit in an account.
+    BalanceSheetOverflows,
 }
 
 /// A kernel fault in a world of institutional events.
@@ -614,6 +652,11 @@ pub type LeafError = rigor_kernel::LeafError<Failure>;
 #[must_use]
 pub fn upcast(from_schema: u32, mut event: serde_json::Value) -> serde_json::Value {
     use serde_json::{json, Value};
+    // A stimulus addressed to a nested organisation is upgraded inside its wrapping.
+    if let Some(inner) = event.pointer_mut("/Scoped/inner") {
+        *inner = upcast(from_schema, inner.take());
+        return event;
+    }
     if from_schema < 3 {
         if let Some(constitution) = event.get_mut("Genesis") {
             for charter in constitution.get_mut("charters").and_then(Value::as_array_mut).into_iter().flatten() {
@@ -876,6 +919,17 @@ impl Payload for Event {
         match self {
             Self::Abroad(inner) => Some(inner),
             _ => None,
+        }
+    }
+    fn may_come_from_outside(&self) -> bool {
+        match self {
+            // What the open world can say: the founding, the time, an observed artifact, an
+            // actor's attempt, a message between actors, and the record of a migration.
+            Self::Genesis(_) | Self::Tick(_) | Self::ArtifactChanged { .. } | Self::Do { .. } | Self::Signal { .. } | Self::Migrated { .. } => true,
+            // Addressed to a nested organisation: judged by what it carries.
+            Self::Scoped { inner, .. } => inner.may_come_from_outside(),
+            // Everything else is the word of a unit and can only be produced by one.
+            _ => false,
         }
     }
 }
