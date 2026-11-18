@@ -13,6 +13,7 @@ git clone --bare --filter=tree:0 https://github.com/kubernetes/kubernetes.git
 cargo run --release --bin stress -- git.git node.git kubernetes.git           # each alone, then together
 cargo run --release --bin stress -- --federate-only git.git node.git kubernetes.git
 cargo run --release --bin stress -- --chain crates/rigor/tests/data/btc-window.txt
+cargo run --release --bin stress -- --registry crates/rigor/tests/data/crates-window.jsonl
 ```
 
 Histories were read on 2026-11-18 at their then-current heads, merge commits included; the counts will drift
@@ -20,9 +21,11 @@ as the projects grow. People are pseudonymised at the boundary: an actor id is a
 resolved) e-mail address or of the Bitcoin output script, and no name, address or script enters the log.
 Findings are reported only in aggregate.
 
-Three slices of this real data are checked into the repository in reduced, pseudonymous form, so that real
-data is part of `cargo test`: 4,000 Node.js commits rich in reverts, 1,500 Node.js commits carrying review
-trailers, and 22 Bitcoin blocks (`crates/rigor/tests/data/`).
+Six slices of this real data are checked into the repository, so that real data is part of `cargo test`
+(`crates/rigor/tests/data/`): 4,000 Node.js commits rich in reverts; 1,500 Node.js commits carrying review
+trailers; 935 Kubernetes commits with the reviews GitHub recorded for 52 pull requests among them; 22 Bitcoin
+blocks; and the index records of 45 crates. People and Bitcoin owners are pseudonymised; package names are
+public and kept.
 
 ## Part 1: three git histories
 
@@ -105,36 +108,79 @@ means. The final amendment is a constructed decision applied to the real record.
 
 ## Part 2: real transfers of value
 
-No git history contains resources. For transfers, spending limits and conservation the system was run on 22
-consecutive real Bitcoin blocks (heights 150000–150021, April 2011), fetched from a public block explorer.
-A larger window was attempted and abandoned when the explorer stopped serving one block's transactions.
+No git history contains resources. For transfers, spending limits and conservation the system was run on 86
+consecutive real Bitcoin blocks (heights 150000-150085, 2011), fetched from a public block explorer.
 
 **The mapping** (`crates/rigor/src/chain.rs`). A signed input is a *delegation*: the owner grants a settler
 the power to transfer from the owner's account, limited to exactly the input's amount and bound to that one
 transaction. The settler moves the value to the outputs under those capabilities, and the remainder (the fee)
 to a treasury; new coin enters only as the treasury's payment of each block's reward. Since the real network
-accepted every one of these transactions, the institution must refuse none — and must refuse a replay.
+accepted every one of these transactions, the institution must refuse none, and must refuse a replay.
 
 | | |
 |---|---|
-| Blocks / transactions | 22 / 938 |
-| Accounts | 2,365 (2,364 admitted at run time) |
-| Purpose-bound, limited delegations granted | 1,359 |
-| Transfers made under them | 2,532 |
-| Value moved | 53,886.8 BTC |
+| Blocks / transactions | 86 / 3,101 |
+| Accounts | 7,895 (7,894 admitted at run time) |
+| Purpose-bound, limited delegations granted | 4,405 |
+| Transfers made under them | 9,766 |
+| Value moved | 226,153 BTC |
+| Events recorded | 102,123 (settled in 0.5 s) |
 | Transfers the institution refused although the network had accepted them | **0** |
-| Replays attempted after settlement (one more unit under a spent capability) / refused | 916 / **916** |
-| Uses of a capability for another purpose attempted / refused | 916 / **916** |
+| Replays attempted after settlement (one more unit under a spent capability) / refused | 3,015 / **3,015** |
+| Uses of a capability for another purpose attempted / refused | 3,015 / **3,015** |
 | Every delegated capability spent to exactly its limit | holds |
-| Final balance of every account equals plain bookkeeping (opening + received − spent) | holds |
+| Final balance of every account equals plain bookkeeping (opening + received - spent) | holds |
 | Conservation; no capability amplifies its parent; chain verifies; replay reproduces the log | holds |
 
 The first comparison with the bookkeeping oracle failed on one account. The fault was in the oracle (it
-processed a block's reward before the fees that fund it and clamped at zero), not in the system; it is
-recorded here because a check that disagrees is only useful if one finds out which side is wrong.
+processed a block's reward before the fees that fund it and clamped at zero), not in the system. And the
+first download stopped at 22 blocks because my fetcher asked for a page past the end of a block with exactly
+50 transactions; that was the fetcher's bug, not the explorer's.
 
-This is 22 blocks, not a chain: it shows the ledger and authority units are right on real transfers with real
-amounts, not that they scale, and "a signature is a bounded delegation" is again a reading, not a fact.
+This is 86 blocks, not a chain, and "a signature is a bounded delegation" is a reading, not a fact.
+
+## Part 3: a package registry
+
+A third kind of record, with two things the others lack: evidence **derived** from other evidence, and
+**retraction**. The crates.io index was read for 15 well-known crates and everything they depend on, to a
+limit of 400 crates.
+
+**The mapping** (`crates/rigor/src/registry.rs`). Each release is attested fit by its publisher, *derived
+from* the attestations of the releases its dependencies resolve to; the publisher undertakes to the registry
+that it is fit; a yank is the publisher *retracting* its own attestation, and whatever was derived from it
+loses its support. Resolution is deliberately simple: each requirement resolves to the highest known release
+it admits, yanked or not. So "fit" means "not yanked and not resting on a yanked release by that
+resolution". It is not what a package manager would install.
+
+| | |
+|---|---|
+| Packages / releases (pre-releases skipped) | 397 / 13,754 |
+| Yanked releases (real retractions) | 910 |
+| Dependencies resolved / not resolvable within the 400 crates | 30,333 / 1,820 |
+| Releases never yanked | 12,844 |
+| ...that the system nevertheless does not hold fit, because they rest on a yanked release | **308** |
+| The set of fit releases equals an independent oracle (memoised recursion over the graph) | equal, 12,536 |
+| Publishers' undertakings: satisfied / open again | 12,536 / 1,218 |
+| Incremental assessment equals from-scratch | 13,754 propositions |
+| Events recorded; time | 158,963; 1.0 s |
+
+## Part 4: reviews from a forge
+
+Kubernetes records review in pull requests. The reviews GitHub's public API records for 52 recently merged
+pull requests were fetched (unauthenticated, hence the small number) and attached to their merge commits: an
+approval is supporting evidence, a request for changes never followed by that reviewer's approval is standing
+evidence against. Of the 52, 9 carried an approval through the review API and 2 a standing objection; the
+rest were approved by comment commands, which this adapter does not read. It is a real sample, not a survey.
+
+## Part 5: two organisations that actually interact
+
+On real data the nested organisations only ran side by side. Interaction across a boundary is shown on the
+constructed scenario instead: the vendor is a whole organisation of its own (institution, engineer, QA,
+envoy) behind a *federated* boundary. When the outer institution holds the vendor to a remediation duty, the
+envoy turns it into a request under the inner institution; when the inner work is done by the inner
+institution's standards, the envoy **claims** outward, and the outer institution still requires evidence it
+trusts itself. Inner evidence and inner identities do not cross. When the inner work fails, the inner
+institution finds the engineer accountable and the outer one finds the *organisation* accountable.
 
 ## What broke, and what was changed
 
@@ -151,7 +197,11 @@ amounts, not that they scale, and "a signature is a bounded delegation" is again
 8. **Review evidence was invisible.** `Reviewed-by` and `Acked-by` trailers are now read: 128,112 reviews.
 9. **The 30-day period was arbitrary.** It is now a rule, revised from the record through governance.
 10. **A capability could not be tied to one transaction.** Added purpose-bound scope; needed for real transfers.
-11. **Those very changes orphaned the steward's own log.** New fields made its stored events unparseable;
+11. **Revising evidence cost as much as the whole graph.** On the registry, where derivation connects
+    everything, each change re-labelled the entire connected component: 297 s for 13,754 releases. Revision
+    now touches only what is downstream of a change, with everything upstream as a fixed boundary: 1.0 s,
+    same conclusions.
+12. **Those very changes orphaned the steward's own log.** New fields made its stored events unparseable;
     it set the log aside and started again. The schema was bumped, the upgrade step written, the log
     recovered by migration, and a test now fails if events change shape without a schema bump.
 
@@ -159,16 +209,16 @@ amounts, not that they scale, and "a signature is a bounded delegation" is again
 
 | Observation | Consequence | Status |
 |---|---|---|
-| Kubernetes records review in pull requests, not trailers: 0 reviews seen | For such projects the only acknowledgement is a distinct committer | open: needs the forge's own data |
-| Nested organisations ran side by side, never interacting | Nesting is shown to be behaviour-preserving at scale; one organisation acting as a member of another is not built | open |
-| Only two kinds of real record so far (version-control histories, a ledger) | Nothing is known about contracts, incidents, regulation | open |
-| The real ledger window is 22 blocks | Correctness on real transfers is shown; scale is not | open |
+| Forge reviews were read for 52 pull requests, through one of several ways projects record approval | The adapter exists and is tested on real data, but says little about review at scale | open |
+| On real data, organisations ran side by side; interaction is shown only on a constructed scenario | No real record of two organisations dealing with each other has been tried | open |
+| The registry mapping resolves dependencies more simply than any package manager | "Fit" here is a defined notion, not installability | by design |
 | 47 reverts still name a hash that is ambiguous or not in the history | Those refutations are absent; counted, not resolved | open |
-| The reflector knows two kinds of improvement and has fixed thresholds | It is a mechanism, not a judge of what the right rule is | by design, for now |
+| The reflector's proposals were approved automatically in the stress runs | The loop was exercised; a human's judgment of a proposal was not | open |
+| Every new kind of record so far added variants to the shared vocabulary | Three adapters, three sets of additions to shared enums | open: the vocabulary item on the roadmap |
 
 ## What this stress test does not establish
 
-A git history is one kind of real-world record. Nothing here says how the model fares on contracts, payments,
-incidents or regulation. The mapping from commits to commitments is an interpretation. And the checks compare
+Three kinds of real record have been tried: version-control histories, a ledger, and a package registry.
+Nothing here says how the model fares on contracts, incidents or regulation. The mapping from commits to commitments is an interpretation. And the checks compare
 the system with itself (replay, from-scratch recomputation, snapshot, solo versus nested) and with one oracle
 written alongside it; none of them is an independent party's judgment of the same data.

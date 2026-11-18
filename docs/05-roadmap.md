@@ -40,17 +40,28 @@ now stand in its log as satisfied commitments.
 | Capabilities bound to one purpose | `a_capability_can_be_bound_to_one_purpose` |
 | Memory bounded in long runs (4.7 GB → 1.28 GB for 4.3 million events) | `stress --federate-only` |
 
+## Also closed (through the steward)
+
+| What | Evidence |
+|---|---|
+| A third kind of real record: 13,754 real crate releases with 910 real retractions | `a_real_registry_with_yanks_agrees_with_the_oracle`; `06-real-data.md` Part 3 |
+| Evidence revision local to what is downstream of a change (297 s to 1 s) | same; `incremental_assessment_equals_from_scratch` still holds |
+| One organisation acting as a member of another, through an envoy and a federated boundary | `federation::*` (two tests) |
+| Forge reviews as evidence for and against | `real_pull_request_reviews_enter_as_evidence_for_and_against` |
+| Real transfers on a larger window (3,101 transactions) | `06-real-data.md` Part 2 |
+| The scheduler is now inside the proved model | Lean `sim_drive`, `drive_assoc` |
+| A vocabulary change can no longer silently orphan a stored log | `changing_the_vocabulary_without_bumping_the_schema_fails_here` |
+
 ## Address next (ordered; each is a steward commitment with a review-by day)
 
 | # | Item | What is wrong today | Done when | Review within |
 |---|---|---|---|---|
-| 1 | **Forge adapter** | Projects that record review in pull requests show no review evidence at all (Kubernetes: 0) | Reviews and check runs enter as evidence bound to commit digests | 60 days |
-| 2 | **Organisations interacting across boundaries** (U9) | Nested organisations have only ever run side by side | One organisation acts as a member of another, with identities and evidence translated at the boundary | 75 days |
-| 3 | **A second kind of real record** | Only version-control histories and a ledger have been tried | A real dataset of another kind (contracts, incidents, procurement) with an independent check | 75 days |
-| 4 | **Open the vocabulary by type parameters** (U16) | Each new domain so far has added variants to shared enums | Units are generic in `Prop`/`Tag`/`Pred` | 90 days |
-| 5 | **Verify the kernel against the Lean model** (U1) | Nothing proves the Rust kernel realises the model the theorems are about | T1–T5 proved of the Rust `Par`/`Runtime` | 180 days |
+| 1 | **Open the vocabulary by type parameters** (U16) | Three adapters each added variants to shared enums | Units are generic in `Prop`/`Tag`/`Pred`; each domain brings its own | 90 days |
+| 2 | **Forge reviews at scale** | 52 pull requests through one review mechanism | An authenticated crawl of a whole project's reviews and check runs | 90 days |
+| 3 | **A human in the loop for the reflector** | Its proposals were approved automatically in the stress runs | Proposals wait for, and record, a person's decision; rejected proposals feed back into its thresholds | 90 days |
+| 4 | **Verify the kernel against the Lean model** (U1) | The model now includes the scheduler, but nothing proves the Rust code realises it | T1-T9 proved of the Rust `Par`/`Runtime` | 180 days |
 
-Items 4 and 5 are large and are deliberately not attempted piecemeal: a partial version of either would add
+Items 1 and 4 are large and are deliberately not attempted piecemeal: a partial version of either would add
 risk to the trusted base without removing an assumption.
 
 ## Deferred (worth doing; not blocking; each with the trigger that would promote it)
@@ -67,7 +78,7 @@ risk to the trusted base without removing an assumption.
 | Termination ranking (U2), strata for all multi-fact units (U4) | No divergence or glitch observed since `settle`; fuel bound catches divergence | A unit other than the adjudicator that reads several facts at once |
 | Purity sandbox for units (A-UNIT) | Units are written in-repo and reviewed | Units supplied by a third party |
 | Time-indexed propositions and entailment (U14) | Worked around by fresh propositions | A domain with recurring obligations over the same fact |
-| Federation: a nested organisation acting as a member of an outer one (U9) | Nesting is behaviourally correct; no use case yet | Two organisations sharing a process |
+| Real data of organisations dealing with each other | Interaction is built and tested on a constructed case | A real inter-organisational record becomes available |
 
 ## Parked (deliberately not pursued now, with the reason)
 

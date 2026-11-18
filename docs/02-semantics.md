@@ -26,6 +26,12 @@ it; no part listens inside another entity's namespace. `Par` adds no identity: i
 `n/k` with actor `n/a`; a kind in `exports` leaves with actor `n`; a kind in `imports` enters. The inside sees
 its own names unprefixed. So an entity is *one actor* outside and *a system* inside.
 
+**1.4a Federated boundary.** A federated entity keeps two vocabularies apart: imported events arrive
+wrapped as *foreign*, so the inside's own units do not mistake an outside act for one of theirs, and only
+events the inside explicitly addresses *abroad* leave, stamped with the entity's name. An **envoy**, an
+ordinary inner member, is the one unit that reads foreign events and writes abroad; identities are
+translated there and nowhere else.
+
 **1.5 Runtime (closed system).** Given a root unit and a FIFO queue `Q`: an external stimulus is enqueued;
 repeatedly dequeue `x`, append it to the log as event `e`, compute `δ(s, e)`, order the emitted events by `src`
 (stable, so each leaf's own order is kept) and enqueue them with `cause = e.id`. When `Q` empties and something
@@ -82,6 +88,10 @@ and, for support of `P`, no *root source* (source of an underived ancestor) is a
 support `s` and rebuttal `r` of the same proposition attack each other, except that an attack on a strictly
 higher-ranked item fails; an undercutter always attacks its target; any successful attack on `e` is also an
 attack on every item derived from `e`.
+
+**4.3a Locality.** A change to an item can alter labels only *downstream* of it: items on the same
+proposition, the target of an undercut, and whatever is derived from any of those. Revision recomputes that
+area only; attackers outside it keep their recorded labels and enter as fixed boundary conditions.
 
 **4.4 Assessment.** Label items by the grounded extension. `P` is **refuted** if some rebuttal is *in*;
 else **accepted** (since the earliest *in* supporter's time) if some supporter is *in*; else **contested** if

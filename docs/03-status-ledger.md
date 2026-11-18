@@ -11,7 +11,7 @@ Every claim this repository makes, with how it is supported. Six statuses, kept 
 - **Assumed** — taken on trust from outside the system.
 - **Unresolved** — not established here.
 
-Run `cargo test` (67 tests, 8 doctests), `cargo clippy --all-targets` and `lean proofs/Rigor.lean` — or
+Run `cargo test` (72 tests, 8 doctests), `cargo clippy --all-targets` and `lean proofs/Rigor.lean` — or
 `cargo run --bin steward`, which runs all of them and records the evidence.
 
 ## 1. Proved (about the model)
@@ -25,9 +25,12 @@ Run `cargo test` (67 tests, 8 doctests), `cargo clippy --all-targets` and `lean 
 | T5 | Two events outside each other's footprint commute on the composite state | `commute` | none |
 | T6 | The capability at the end of any attenuating chain grants no action and no limit beyond the root's | `no_amplification` | none |
 | T7 | An enabled transfer between distinct holders preserves the total | `transfer_conserves` | propext, Quot.sound |
+| T8 | Refinement is preserved by the scheduler: two units related by a simulation produce the same log from the same stimuli, with every output fed back as a later input | `sim_drive` | propext |
+| T9 | Under the scheduler, the bracketing of a composition cannot be observed in the log | `drive_assoc` | propext |
 
-**Gap between model and code.** The Lean model has binary `par` over a single event type and no scheduler:
-it omits the feedback queue, `settle`, `Entity`, kinds, and all six institutional units. The Rust code
+**Gap between model and code.** The Lean model has binary `par` over a single event type and a FIFO
+scheduler with feedback (T8, T9). It still omits `settle`, the ordering of simultaneous outputs, `Entity`,
+kinds, and all the institutional units. The Rust code
 is connected to these theorems only by the tests below. That correspondence is **unresolved** (U1).
 
 ## 1a. Compiler-enforced
@@ -98,6 +101,9 @@ rejected on the way in.
 | P27 | A snapshot is resumed only if an audit by replay is accepted evidence; a forged but self-consistent snapshot is caught by the audit | scenario | `a_snapshot_is_resumed_only_once_someone_trusted_has_shown_it_faithful` |
 | P28 | Review trailers enter as evidence; the reflector proposes a maintenance period from observed refutation delays, and it takes effect only on approval | 1,500 real commits; constructed | `review_trailers_are_evidence_…`, `the_reflector_learns_the_maintenance_period_…` |
 | P29 | An event that changed shape between schemas is upgraded, not lost; changing the stored form of events without bumping the schema fails a test | constructed; fixed sample | `an_event_that_changed_shape_is_upgraded_not_lost`, `changing_the_vocabulary_without_bumping_the_schema_fails_here` |
+| P30 | **A real package registry**: 3,679 real releases (282 yanked): the fit set equals an independent oracle; releases resting on a yanked one lose support; revision work stays local | fixture in the repository | `a_real_registry_with_yanks_agrees_with_the_oracle` |
+| P31 | **Real forge reviews**: approvals support, standing change-requests rebut; objected changes are not accepted | 935 real commits, 52 real pull requests | `real_pull_request_reviews_enter_as_evidence_for_and_against` |
+| P32 | **Two institutions interacting**: an outer duty becomes inner work; the inner result crosses only as a claim; inner evidence and identities do not cross; each institution judges at its own level | constructed | `federation::a_duty_laid_on_an_organisation_...`, `federation::each_institution_judges_at_its_own_level_...` |
 | P23 | Every existing judgment a stimulus changes lies inside the static cone of the change (closes U3) | 360 random cases, over 100 non-trivial | `exact_impact_always_lies_inside_the_static_cone` |
 
 ## 3a. Measured on external data (reproducible with network access; not part of `cargo test`)
@@ -108,7 +114,8 @@ rejected on the way in.
 | R2 | A world resumed from a half-way snapshot and continued equals the uninterrupted one; resume takes under 1 s where replay takes 9–14 s | the same three histories | same |
 | R3 | The rules revised from the record: each project's maintenance period was lengthened two or three times by reflector proposal and approval, differently per project; a final amendment re-assesses each record consistently | the same three histories | same |
 | R4 | Three histories as separately bounded organisations in one world conclude what the oracle says; with compaction the run holds 32,287 of 4,303,196 entries and peaks at 1.28 GB | one hash chain, verified stretch by stretch | `stress --federate-only` |
-| R5 | Real transfers: 938 real Bitcoin transactions settled with no wrongful refusal, 916 of 916 replays refused, balances equal to bookkeeping | 22 blocks, 2,365 accounts | `stress --chain`; also P24 |
+| R5 | Real transfers: 3,101 real Bitcoin transactions settled with no wrongful refusal, 3,015 of 3,015 replays and off-purpose uses refused, every budget spent exactly, balances equal to bookkeeping | 86 blocks, 7,895 accounts | `stress --chain`; also P24 |
+| R7 | A real package registry: of 12,844 releases never yanked, 308 are not held fit because they rest on a yanked release; the fit set equals an independent oracle | 397 crates, 13,754 releases, 910 yanks | `stress --registry`; also P30 |
 | R6 | The steward, on this repository: caught and recorded a lint failure; re-ran only what had changed; migrated its own log across two schema changes, the second a real change of event shape; and holds six roadmap items as closed on the project's acceptance | 2026-11-18 | `cargo run --bin steward`; `.rigor/` |
 
 **No longer reproducible.** An earlier Python prototype of the same semantics was kept alongside the Rust
@@ -131,7 +138,7 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 | A-RULES | The rule set expresses what the institution means | Verdicts are sound for the rules, not for justice |
 | A-OBS | "Notified" means a message was delivered, not that anyone understood it | The `knew` finding |
 | A-SNAPSHOT | For a plain resume: the snapshot file is the state its log produces. For an attested resume: the auditor who replayed is trustworthy | Everything after a resume |
-| A-TCB | The kernel, reasoners, vocabulary and institutional units are correct (about 4,100 lines) | Everything not independently proved |
+| A-TCB | The kernel, reasoners, vocabulary and institutional units are correct (about 4,400 lines) | Everything not independently proved |
 | A-TOOLS | The Rust compiler, `serde`, `serde_json`, `sha2`, and the Lean kernel are correct | Everything marked compiler-enforced or proved |
 
 ## 5. Unresolved
@@ -146,7 +153,7 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 | U6 | No liveness property of any kind is established |
 | U7 | Refinement relations must be supplied by hand; there is no automatic refinement checker |
 | U8 | Distributed execution, log merging, and operation under partition are not addressed |
-| U9 | A nested organisation acting *as a member* of an outer institution (inner verdicts becoming outer evidence) is not built; nesting is tested for behavioural isomorphism only |
+| U9 | One organisation acting as a member of another is built and tested (P32) on a constructed case only; on real data organisations have only run side by side |
 | U10 | Uncertainty is ordinal (method ranks). No probabilities, no quantitative confidence |
 | U11 | Confidentiality: boundaries stop units *listening*, but the log is global and readable |
 | U12 | Members can be admitted, expelled and given roles at run time; units are still fixed at build time |
@@ -158,7 +165,7 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 | U19 | Migration replays old stimuli under today's units, so derived events may differ from the old log's; only the stimuli and the old chain head are carried over. Upgrade steps are written by hand for each change of shape; a guard test fails when the stored form of events changes without a schema bump, but nothing checks that a hand-written step preserves meaning |
 | U20 | Backdated records get their period from arrival: a policy, not a model of event time versus record time |
 | U21 | Identity merging is only what the project's own mailmap says |
-| U22 | Real transfers have been run on 22 blocks only: correctness, not scale. Nested organisations have run side by side on real data but never interacting. Only two kinds of real record have been tried |
+| U22 | Three kinds of real record have been tried (version-control histories, a ledger window of 86 blocks, a registry of 397 packages). Each adapter is an interpretation, and each oracle was written by the same author |
 | U23 | The reflector's thresholds are fixed parameters and it knows two kinds of improvement (a method's rank; the maintenance period). It shows that rules can be revised from the record, not that the revision is right. In the stress runs the project's approval was automatic |
 | U17 | In-memory state digests (used only by the model checker) rely on `std::hash`, which is not stable across compiler versions; they are never persisted or compared across builds |
 
@@ -182,6 +189,7 @@ that agreement cannot be re-run from this repository; it is recorded here as his
 | N15 | **Judging every family on every cascade does not scale.** Found on real data: throughput fell 20-fold over 61,537 commits because each judgment enumerated every member. Fixed; pinned by P17 | first stress run | `06-real-data.md` |
 | N16 | **A version-control history does not contain the evidence of review.** 5% of Kubernetes commits show an independent acknowledgement in git metadata | git metadata only | `06-real-data.md` |
 | N17 | **Real records are not well-formed.** 11% of declared reverts cannot be resolved to one earlier commit; 578 commits have clocks behind ones already seen | three histories | `06-real-data.md` |
+| N19 | **Revising evidence over the whole connected component does not scale** when derivation connects everything: 297 s for a real registry of 13,754 releases. Revision is now downstream-local (1 s); the from-scratch reference is kept and still agrees | real registry | `06-real-data.md` |
 | N18 | **A vocabulary change silently orphaned a stored log.** Adding fields to events made the steward's own log unparseable; it set the log aside and began a new one, losing its record of closed items. Found on the next run. Fixed by bumping the schema, writing the upgrade step, recovering the log by migration, and adding the guard test (P29) | this repository, 2026-11-18 | `.rigor/` |
 | N14 | **Nobody is outside the model.** When the service works, the scripted Alice never pays what she promised, and the same rules find her accountable and liable. Not a bug | scenario, working service | `working_service_everything_is_satisfied` |
 
